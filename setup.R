@@ -51,9 +51,12 @@ packages <- c(
   "flextable", 
   "ggseas",
   "furrr",
+  "arcgisutils",
+  "readxl",
+  "SPEI",
+  "elevatr",
   "dtplyr"
   )
-
 
 packages <- c(packages, "tidyverse")
 
