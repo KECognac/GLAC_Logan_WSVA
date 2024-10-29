@@ -74,10 +74,10 @@ if (!"climateR" %in% installed.packages()) {
 library(climateR)
 
 
-if (!"cft" %in% installed.packages()) {
-  devtools::install_github("earthlab/cft")
-}
-library(cft)
+# if (!"cft" %in% installed.packages()) {
+#   devtools::install_github("earthlab/cft")
+# }
+# library(cft)
 
 # source all functions --------------------------
 
