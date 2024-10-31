@@ -56,7 +56,8 @@ packages <- c(
   "SPEI",
   "elevatr",
   "dtplyr",
-  "cowplot"
+  "cowplot",
+  "padr"
   )
 
 packages <- c(packages, "tidyverse")
