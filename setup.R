@@ -57,7 +57,9 @@ packages <- c(
   "elevatr",
   "dtplyr",
   "cowplot",
-  "padr"
+  "padr",
+  "units",
+  "leafem"
   )
 
 packages <- c(packages, "tidyverse")
