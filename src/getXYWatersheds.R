@@ -43,7 +43,7 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = 4269, clip = FA
       
     } else {
       
-      better_termination <- get_split_catchment(st_cast(aoi))[2,]
+      better_termination <- get_split_catchment(aoi)[2,]
       
     }
     
@@ -132,4 +132,5 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = 4269, clip = FA
     
     return(nhd_catch)
     
-  }}
+  }
+  }
