@@ -1,5 +1,9 @@
 
-getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = 4269, clip = FALSE, snap = TRUE){
+getXYWatersheds <- function(sf = NULL,
+                            coordinates = NULL,
+                            crs = 4326,
+                            clip = FALSE,
+                            snap = TRUE) {
   
   # Clip watershed to exact XY location
   if(clip == TRUE){
@@ -35,7 +39,7 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = 4269, clip = FA
       
       # "Snap" our site to the nearest NHD flowline feature
       nearest_points <- st_nearest_points(aoi, flowline)
-      snapped_points_sf <- st_cast(nearest_points, "POINT")[2,]
+      snapped_points_sf <- st_cast(nearest_points, "POINT") #[2,] CM these dimensions threw error
       
       # Clip/split our catchment to only include the portion of the
       # catchment upstream of our site:
@@ -64,7 +68,7 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = 4269, clip = FA
       dplyr::distinct(featureid,.keep_all=TRUE) %>%
       dplyr::filter(featureid != flowline$comid) %>%
       dplyr::bind_rows(., better_termination) %>%
-      #dplyr::group_by(featureid) %>%
+      dplyr::group_by(featureid) %>% #CM uncommented this, otherwise just returns a single polygon. NOt sure if that was the intent....
       dplyr::summarize() %>%
       nngeo::st_remove_holes() 
     
@@ -78,8 +82,6 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = 4269, clip = FA
     
     # Old approach, no clipping:
   } else {
-    
-    sf::sf_use_s2(FALSE)
     
     if(is.null(sf)){
       
@@ -124,7 +126,7 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = 4269, clip = FA
     nhd_catch <-  upstream$comid_list %>%
       map(~nhdplusTools::get_nhdplus(comid = .,
                                      realization='catchment',
-                                     t_srs = 4269)) %>%
+                                     t_srs = 4326)) %>%
       dplyr::bind_rows() %>%
       dplyr::distinct(featureid,.keep_all=TRUE) %>%
       dplyr::group_by(featureid) %>%
@@ -133,4 +135,5 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = 4269, clip = FA
     return(nhd_catch)
     
   }
-  }
+  
+}

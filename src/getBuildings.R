@@ -16,6 +16,7 @@ getBuildings <- function(park_boundary, dist = 0){
     sf::st_buffer(dist = dist)
   
   buildings <- sf::st_read(temp2, layer = "NPS_-_Buildings_-_Web_Mercator") %>%
+    st_make_valid() %>% 
     sf::st_zm() 
   
   if(st_crs(buildings) != st_crs(buffer)){

@@ -28,8 +28,6 @@ getNOAA <-
     
     #options(noaakey = noaa_key)
     
-    sf::sf_use_s2(FALSE)
-    
     
     #pull all stations and make spatial
     all <- rnoaa::ghcnd_stations() %>%
@@ -74,11 +72,11 @@ getNOAA <-
                      paste0(path, "/", park, "_noaa.shp"),
                      append = FALSE
                      )
-        
-        
+
+      print(paste("NOAA data for specified dates saved to respective NPS park folder in:", paste0(getwd(), "/", path)))
+      
       }
       
-      print(paste("NOAA data for specified dates saved to respective NPS park folder in:", paste0(getwd(), "/", path)))
     
     return(final_data)
     

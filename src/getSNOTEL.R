@@ -17,8 +17,6 @@ getSNOTEL <-
            save = FALSE,
            path = NULL) {
     
-    sf::sf_use_s2(FALSE)
-    
     # add buffer around area of interest
     aoi <- aoi %>%
       sf::st_buffer(dist = dist)
