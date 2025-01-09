@@ -128,7 +128,7 @@ getXYWatersheds <- function(sf = NULL,
                                      t_srs = 4326)) %>%
       dplyr::bind_rows() %>%
       dplyr::distinct(featureid,.keep_all=TRUE) %>%
-      dplyr::group_by(featureid) %>%
+ 
       dplyr::summarize()
     
     return(nhd_catch)
