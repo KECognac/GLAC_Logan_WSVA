@@ -68,7 +68,6 @@ getXYWatersheds <- function(sf = NULL,
       dplyr::distinct(featureid,.keep_all=TRUE) %>%
       dplyr::filter(featureid != flowline$comid) %>%
       dplyr::bind_rows(., better_termination) %>%
-      dplyr::group_by(featureid) %>% #CM uncommented this, otherwise just returns a single polygon. NOt sure if that was the intent....
       dplyr::summarize() %>%
       nngeo::st_remove_holes() 
     
