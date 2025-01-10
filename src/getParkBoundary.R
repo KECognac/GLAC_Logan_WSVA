@@ -29,8 +29,6 @@ getParkBoundary <- function(park, save = FALSE, path = NULL){
   temp2 <- tempfile()
   unzip(temp1, exdir = temp2)
   
-  #sf::sf_use_s2(FALSE)
-  
   parks <- sf::st_read(paste0(temp2, "/Administrative_Boundaries_of_National_Park_System_Units.gdb/Administrative_Boundaries_of_National_Park_System_Units.gdb"), quiet = TRUE)
   
   park_boundary <- parks %>% 

@@ -59,7 +59,8 @@ packages <- c(
   "cowplot",
   "padr",
   "units",
-  "leafem"
+  "leafem",
+  "geosphere"
   )
 
 packages <- c(packages, "tidyverse")
