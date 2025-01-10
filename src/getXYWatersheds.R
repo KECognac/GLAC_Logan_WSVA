@@ -39,7 +39,7 @@ getXYWatersheds <- function(sf = NULL,
       
       # "Snap" our site to the nearest NHD flowline feature
       nearest_points <- st_nearest_points(aoi, flowline)
-      snapped_points_sf <- st_cast(nearest_points, "POINT") #[2,] CM these dimensions threw error
+      snapped_points_sf <- st_cast(nearest_points, "POINT")[2,]
       
       # Clip/split our catchment to only include the portion of the
       # catchment upstream of our site:
