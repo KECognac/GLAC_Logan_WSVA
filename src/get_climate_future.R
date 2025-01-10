@@ -85,22 +85,24 @@ if(any(unique(sf::st_geometry_type(sf)) %in% c("POLYGON", "MULTIPOLYGON"))) {
       if(inherits(clim[[1]], "SpatRaster")) {
         
         clim_crs <- st_crs(clim[[1]])
-    
+        
+        # If the crs of the clim and sf objects aren't the same....
         if(st_crs(clim[[1]]) != st_crs(sf)) {
           
+          # crop using a projected version of the aoi
           clim <- clim %>%
             purrr::map(
               # getGridMET defaults AOI to bbox - so crop / mask results to sf extent
               ~terra::crop(., st_transform(aoi, crs = clim_crs), mask = TRUE),
               crs = clim_crs)
+          
           } else {
             
+            # otherwise no need to transform
             clim <- clim %>%
               purrr::map(
                 # defaults AOI to bbox - so crop / mask results to sf extent
-                ~terra::crop(., aoi %>% 
-                               st_transform(., crs = clim_crs), 
-                             mask = TRUE),
+                ~terra::crop(., aoi, mask = TRUE),
                 crs = clim_crs)
             
           }
