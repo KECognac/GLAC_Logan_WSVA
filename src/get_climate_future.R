@@ -3,7 +3,7 @@
 #' @param start Start date for pulling in data. Default is "1979-01-01".
 #' @param end End data for pulling in data. Default is "2023-12-31".
 #' @param vars Vector of variables you would like to pull data for. Options include: "tmmx", "tmmn", "pr", "rmax", "rmin", "pet", "etr", "vpd", "vs". Default is "tmmx", "tmmn", "pr", and "pet"
-#' @param GCM Vector of which climate models (GCMs) to pull.
+#' @param GCM Vector of which climate models (GCMs) to pull. If "all", pulls all NPS-used climate futures.
 #' @return a data frame of requested data for each area of interest.
 #'
 get_climate_future <- function(sf,
@@ -13,6 +13,37 @@ get_climate_future <- function(sf,
                                  vars = c("tasmax", "tasmin", "pr"),
                                  GCM = select_cfs$GCM) {
   
+  if(any(GCM == "all")){
+    
+  GCM <- c(
+    "inmcm4.rcp45",
+    "NorESM1-M.rcp45",
+    "MRI-CGCM3.rcp45",
+    "MIROC5.rcp45",
+    "MIROC-ESM-CHEM.rcp45",
+    "IPSL-CM5A-LR.rcp45",
+    "HadGEM2-CC365.rcp45",
+    "GFDL-ESM2G.rcp45",
+    "CanESM2.rcp45",
+    "CSIRO-Mk3-6-0.rcp45",
+    "CNRM-CM5.rcp45",
+    "CCSM4.rcp45",
+    "BNU-ESM.rcp45",
+    "inmcm4.rcp85",
+    "NorESM1-M.rcp85",
+    "MRI-CGCM3.rcp85",
+    "MIROC5.rcp85",
+    "MIROC-ESM-CHEM.rcp85",
+    "IPSL-CM5A-LR.rcp85",
+    "HadGEM2-CC365.rcp85",
+    "GFDL-ESM2G.rcp85",
+    "CanESM2.rcp85",
+    "CSIRO-Mk3-6-0.rcp85",
+    "CNRM-CM5.rcp85",
+    "CCSM4.rcp85",
+    "BNU-ESM.rcp85")
+  
+  }
   
   #sf <- watersupply_watershed
   #col_name <- "name"
@@ -54,22 +85,24 @@ if(any(unique(sf::st_geometry_type(sf)) %in% c("POLYGON", "MULTIPOLYGON"))) {
       if(inherits(clim[[1]], "SpatRaster")) {
         
         clim_crs <- st_crs(clim[[1]])
-    
+        
+        # If the crs of the clim and sf objects aren't the same....
         if(st_crs(clim[[1]]) != st_crs(sf)) {
           
+          # crop using a projected version of the aoi
           clim <- clim %>%
             purrr::map(
               # getGridMET defaults AOI to bbox - so crop / mask results to sf extent
               ~terra::crop(., st_transform(aoi, crs = clim_crs), mask = TRUE),
               crs = clim_crs)
+          
           } else {
             
+            # otherwise no need to transform
             clim <- clim %>%
               purrr::map(
                 # defaults AOI to bbox - so crop / mask results to sf extent
-                ~terra::crop(., aoi %>% 
-                               st_transform(., crs = clim_crs), 
-                             mask = TRUE),
+                ~terra::crop(., aoi, mask = TRUE),
                 crs = clim_crs)
             
           }
