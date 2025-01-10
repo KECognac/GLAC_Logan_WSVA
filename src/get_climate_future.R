@@ -13,6 +13,37 @@ get_climate_future <- function(sf,
                                  vars = c("tasmax", "tasmin", "pr"),
                                  GCM = select_cfs$GCM) {
   
+  if(any(GCM == "all")){
+    
+  GCM <- c(
+    "inmcm4.rcp45",
+    "NorESM1-M.rcp45",
+    "MRI-CGCM3.rcp45",
+    "MIROC5.rcp45",
+    "MIROC-ESM-CHEM.rcp45",
+    "IPSL-CM5A-LR.rcp45",
+    "HadGEM2-CC365.rcp45",
+    "GFDL-ESM2G.rcp45",
+    "CanESM2.rcp45",
+    "CSIRO-Mk3-6-0.rcp45",
+    "CNRM-CM5.rcp45",
+    "CCSM4.rcp45",
+    "BNU-ESM.rcp45",
+    "inmcm4.rcp85",
+    "NorESM1-M.rcp85",
+    "MRI-CGCM3.rcp85",
+    "MIROC5.rcp85",
+    "MIROC-ESM-CHEM.rcp85",
+    "IPSL-CM5A-LR.rcp85",
+    "HadGEM2-CC365.rcp85",
+    "GFDL-ESM2G.rcp85",
+    "CanESM2.rcp85",
+    "CSIRO-Mk3-6-0.rcp85",
+    "CNRM-CM5.rcp85",
+    "CCSM4.rcp85",
+    "BNU-ESM.rcp85")
+  
+  }
   
   #sf <- watersupply_watershed
   #col_name <- "name"
