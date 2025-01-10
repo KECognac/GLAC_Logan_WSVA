@@ -3,7 +3,7 @@
 #' @param start Start date for pulling in data. Default is "1979-01-01".
 #' @param end End data for pulling in data. Default is "2023-12-31".
 #' @param vars Vector of variables you would like to pull data for. Options include: "tmmx", "tmmn", "pr", "rmax", "rmin", "pet", "etr", "vpd", "vs". Default is "tmmx", "tmmn", "pr", and "pet"
-#' @param GCM Vector of which climate models (GCMs) to pull.
+#' @param GCM Vector of which climate models (GCMs) to pull. If "all", pulls all NPS-used climate futures.
 #' @return a data frame of requested data for each area of interest.
 #'
 get_climate_future <- function(sf,
