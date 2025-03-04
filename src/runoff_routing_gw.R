@@ -32,7 +32,8 @@ runoff_routing_gw <- function(df, tau_q, tau_s, vs, delay = 0, loss,
                               baseflow = 0, 
                               runoff_col = "runoff_in_wbm",
                               return_components = FALSE,
-                              slow_only = FALSE) {
+                              slow_only = FALSE,
+                              max_inf = 50) {
   
   
   #df <- jemez_wbm
@@ -82,6 +83,9 @@ runoff_routing_gw <- function(df, tau_q, tau_s, vs, delay = 0, loss,
   # Partition slowflow to groundwater (depending on options)
   if (slow_only == TRUE) {
     Xg <- loss*Xs
+    #exceeds_threshold <- ifelse(Xg > max_inf, Xg, 0)
+    Xg[Xg > max_inf] <- max_inf
+    
     Xs <- Xs - Xg
     
   } else if (slow_only == FALSE) {
