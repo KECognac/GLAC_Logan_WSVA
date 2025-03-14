@@ -78,6 +78,13 @@ if (!"climateR" %in% installed.packages()) {
 library(climateR)
 
 
+# suggested install of Rnoaa - 
+if (!"rnoaa" %in% installed.packages()) {
+  remotes::install_github("ropensci/rnoaa.git")
+}
+library(rnoaa)
+
+
 # if (!"cft" %in% installed.packages()) {
 #   devtools::install_github("earthlab/cft")
 # }
