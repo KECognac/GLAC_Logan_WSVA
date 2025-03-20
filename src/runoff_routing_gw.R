@@ -99,6 +99,7 @@ runoff_routing_gw <- function(df, tau_q, tau_s, vs, delay = 0, loss,
   
   # Create output dataframe
   df_ret <- data.frame(date = df$date, Q_tot)
+  #df_ret <- data.frame(Q_tot)
   
   # Add separate components if requested
   if (return_components == TRUE) {
