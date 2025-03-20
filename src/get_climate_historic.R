@@ -30,7 +30,7 @@ if(any(unique(sf::st_geometry_type(sf)) %in% c("POLYGON", "MULTIPOLYGON"))){
                                  endDate = end)
     
     
-    if(is.list(clim) | inherits(clim[[1]], "SpatRaster")){
+    if(!is.data.frame(clim) | inherits(clim[[1]], "SpatRaster")){
 
     
     clim_crs <- crs(clim[[1]])
