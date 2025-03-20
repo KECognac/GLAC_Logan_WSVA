@@ -82,7 +82,7 @@ if(any(unique(sf::st_geometry_type(sf)) %in% c("POLYGON", "MULTIPOLYGON"))) {
                               endDate = end) 
         
       # If the result is a spatraster (i.e., AOI spanned more than 1 grid cell)
-      if(inherits(clim[[1]], "SpatRaster")) {
+      if(!is.data.frame(clim) | inherits(clim[[1]], "SpatRaster")) {
         
         clim_crs <- st_crs(clim[[1]])
         
