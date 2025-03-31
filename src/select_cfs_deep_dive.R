@@ -11,11 +11,20 @@
 #' @param high_y character string for what to call high y, e.g., wet
 #' @param low_y character string for what to call low y, e.g., dry
 #' @param to_plot logical varialbe whether to return plot. If TRUE, returns a 
+#' @param park if to_plot is TRUE, the park name to put in the plot title
 #' list with first 
 
-select_cfs_deep_dive <- function(df, x, y, x_name = x, y_name = y, high_x = NULL, low_x = NULL, high_y = NULL, low_y = NULL, to_plot = TRUE) {
-  
-  #future_differentials <- df
+select_cfs_deep_dive <- function(df,
+                                 x,
+                                 y,
+                                 x_name = x,
+                                 y_name = y,
+                                 high_x = NULL,
+                                 low_x = NULL,
+                                 high_y = NULL,
+                                 low_y = NULL,
+                                 to_plot = TRUE,
+                                 park = NULL) {
   
   mean_x <- df[[x]] %>% mean()
   q75_x <- df[[x]] %>% quantile(.75) %>% as.numeric()
