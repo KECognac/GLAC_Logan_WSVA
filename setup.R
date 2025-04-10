@@ -53,7 +53,6 @@ packages <- c(
   "RCurl",
   "readxl",
   "remotes",
-  "rnoaa",
   "rvest",
   "scales",
   "sf",
