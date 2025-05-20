@@ -177,7 +177,7 @@ select_cfs_deep_dive <- function(df,
   
   if (to_plot == TRUE) {
     
-    p <- ggplot(df, aes(!!sym(x), !!sym(y), xmin = q25_x, xmax = q75_x, 
+    p <- ggplot(df, aes(!!sym(x), 365.25 * !!sym(y), xmin = q25_x, xmax = q75_x, 
                         ymin = q25_y, ymax = q75_y) ) + 
       geom_point(aes(shape = RCP, fill = CF), size = 4, stroke = 1) +
       #PlotTheme +
