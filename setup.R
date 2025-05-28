@@ -49,6 +49,7 @@ packages <- c(
   "padr",
   "patchwork",
   "plotly",
+  "progress",
   "RColorBrewer",
   "RCurl",
   "readxl",
