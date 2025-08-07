@@ -41,8 +41,8 @@ getSNOTEL <-
       dplyr::select(Name,
                     Site,
                     State,
-                    County,
-                    Network,
+                    County = countyName,
+                    #Network,
                     Elevation_ft,
                     HUC,
                     #UNIT_CODE, # Only for Park Units
