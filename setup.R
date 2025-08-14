@@ -44,6 +44,7 @@ packages <- c(
   "maptiles",
   "mapview",
   "Metrics",
+  "ncdf4",
   "nhdplusTools",
   "nngeo",
   "padr",
