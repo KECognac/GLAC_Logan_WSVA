@@ -30,7 +30,7 @@ packages <- c(
   "ggfortify",
   "ggpubr",
   "ggrepel",
-  "ggseas",
+  # "ggseas",
   "ggthemes",
   "gridExtra",
   "httr",
@@ -84,7 +84,7 @@ library(climateR)
 
 # suggested install of Rnoaa - 
 if (!"rnoaa" %in% installed.packages()) {
-  remotes::install_github("ropensci/rnoaa.git")
+  remotes::install_github("ropensci/rnoaa")
 }
 library(rnoaa)
 
