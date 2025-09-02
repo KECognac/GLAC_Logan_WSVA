@@ -41,8 +41,8 @@ getSNOTEL <-
       dplyr::select(Name,
                     Site,
                     State,
-                    County,
-                    Network,
+                    County = countyName,
+                    # Network,
                     Elevation_ft,
                     HUC,
                     #UNIT_CODE, # Only for Park Units
@@ -58,6 +58,7 @@ getSNOTEL <-
       dat[[i]] <- soilDB::fetchSCAN(site.code = siteID[i], 
                                     year = years,
                                     timeseries = "Daily") %>%
+        map(~ mutate_all(., as.character)) %>%
         bind_rows() %>%
         as_tibble() %>%
         #remove metadata columns
