@@ -24,7 +24,9 @@ select_cfs_deep_dive <- function(df,
                                  high_y = NULL,
                                  low_y = NULL,
                                  to_plot = TRUE,
-                                 park = NULL) {
+                                 park = NULL,
+                                 fill_var = "CF",
+                                 fill_var_name = "Climate Future") {
   
   mean_x <- df[[x]] %>% mean()
   q75_x <- df[[x]] %>% quantile(.75) %>% as.numeric()
@@ -169,7 +171,7 @@ select_cfs_deep_dive <- function(df,
   # return selected methods based on method identified in parameters
   selected_gcms <- df %>% 
     drop_na("pca") %>% 
-    dplyr::select(GCM, CF)
+    dplyr::select(GCM, CF, !!sym(x), !!sym(y))
   
   #Presentation Figure:
   
@@ -177,20 +179,28 @@ select_cfs_deep_dive <- function(df,
   
   if (to_plot == TRUE) {
     
+    if (fill_var == "CF") {
+      fill_asth <- scale_fill_manual(values = c("gray", "darkred", "darkblue", "pink", "lightblue"))
+      guide_asth <- guides(fill = guide_legend(title = fill_var_name, 
+                                               override.aes = list(shape = 21, size = 5, color = "black")),
+                           shape = guide_legend(override.aes = list(fill = "black"))) 
+    } else {
+      fill_asth <- scale_fill_gradient(fill_var_name, guide = "colorbar", high = "red", low = "yellow")
+      guide_asth <- guides(fill = "colorbar")
+    }
+    
     p <- ggplot(df, aes(!!sym(x), 365.25 * !!sym(y), xmin = q25_x, xmax = q75_x, 
                         ymin = q25_y, ymax = q75_y) ) + 
-      geom_point(aes(shape = RCP, fill = CF), size = 4, stroke = 1) +
+      geom_point(aes(shape = RCP, fill = !!sym(fill_var)), size = 4, stroke = 1) +
       #PlotTheme +
       labs(
-        title = paste(park, "- Changes in climate means in", 2050 , "by GCM run"),
+        title = paste(park, " Changes in climate means in", 2050 , "by GCM run"),
         x =paste0("Change in ", x_name),
         y = paste0("Change in ", y_name)
       ) +
-      scale_fill_manual(values = c("gray", "darkred", "darkblue", "pink", "lightblue")) +
+      fill_asth +
       scale_shape_manual(values = c(21, 24)) +
-      guides(fill = guide_legend(title = "Climate Future", 
-                                 override.aes = list(shape = 21, size = 5, color = "black")),
-             shape = guide_legend(override.aes = list(fill = "black"))) +
+      guide_asth +
       
       #geom_point(colour="black",size=4) +
       theme(
