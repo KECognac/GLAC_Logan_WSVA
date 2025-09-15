@@ -279,7 +279,7 @@ get_climate_future <- function(sf,
       # ensure gridmet_points has coords & is POINT sf
       if (sf::st_crs(gridmet_points)$epsg != 4326){
         
-        gridmet_points <- st_transform(historical_poins, 4326)
+        gridmet_points <- st_transform(gridmet_points, 4326)
       }
       
       # for each row in `points`, find the index of its single nearest historical point
