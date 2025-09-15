@@ -40,7 +40,17 @@
 #' - Temperatures (K) are converted to °C:
 #'   `tmax_C`, `tmin_C`, and `tmean_C = (tmax_C + tmin_C)/2`.
 #' - Precipitation is returned as daily totals in mm (`ppt_mm`).
-#' - Other MACA variables may be available; see `climateR` docs.
+#' - Other MACA variables available: 
+#'    tasmax—Maximum daily temperature near surface
+#'    tasmin—Minimum daily temperature near surface
+#'    rhsmax—Maximum daily relative humidity near surface
+#'    rhsmin—Minimum daily relative humidity near surface
+#'    huss—Average daily specific humidity near surface
+#'    pr—Average daily precipitation amount at surface
+#'    rsds—Average daily downward shortwave radiation at surface
+#'    was—Average daily wind speed near surface
+#'    uas—Average daily eastward component of wind near surface
+#'    vas—Average daily northward component of wind near surface
 #'
 #' ## Identifier handling
 #' - The column named in `col_name` is temporarily renamed to `join_index`
