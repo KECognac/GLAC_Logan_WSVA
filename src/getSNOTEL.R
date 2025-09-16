@@ -58,6 +58,7 @@ getSNOTEL <-
       dat[[i]] <- soilDB::fetchSCAN(site.code = siteID[i], 
                                     year = years,
                                     timeseries = "Daily") %>%
+        map(~ mutate_all(., as.character)) %>%
         bind_rows() %>%
         as_tibble() %>%
         #remove metadata columns
