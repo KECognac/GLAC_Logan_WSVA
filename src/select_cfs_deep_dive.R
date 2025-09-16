@@ -26,7 +26,25 @@ select_cfs_deep_dive <- function(df,
                                  to_plot = TRUE,
                                  park = NULL,
                                  fill_var = "CF",
-                                 fill_var_name = "Climate Future") {
+                                 fill_var_name = "Climate Future",
+                                 region = "SWR") {
+  
+  
+  # Read in all available gcms
+  all_cfs <-
+    read_delim( "https://raw.githubusercontent.com/rossyndicate/CCRP_automated_climate_futures/master/data/general/GCM_skill_by_region.txt" ) %>%
+    dplyr::filter(Region == region) %>% #,
+    #Rank < 19) %>%
+    dplyr::mutate(GCM = ifelse(GCM == "HadGEM2-ES.", "HadGEM2-ES365.", GCM),
+                  GCM = ifelse(GCM == "HadGEM2-CC.", "HadGEM2-CC365.", GCM)) %>%
+    tidyr::crossing(data.table(RCP = c("rcp45","rcp85"))) %>%
+    dplyr::mutate(GCM = paste0(GCM,RCP)) %>% 
+    dplyr::mutate(Skill = ifelse(Rank > 18, "Low Skill", "High Skill"))
+  
+  df_og <- df
+
+    df <- df %>%
+    dplyr::filter(GCM %in% all_cfs[all_cfs$Skill == "High Skill",]$GCM)
   
   mean_x <- df[[x]] %>% mean()
   q75_x <- df[[x]] %>% quantile(.75) %>% as.numeric()
@@ -34,6 +52,9 @@ select_cfs_deep_dive <- function(df,
   mean_y <- df[[y]] %>% mean()
   q75_y <- df[[y]] %>% quantile(.75) %>% as.numeric()
   q25_y <- df[[y]] %>% quantile(.25) %>% as.numeric()
+  
+  print(mean_y)
+  print(mean_x)
   
   high_x <- ifelse(is.null(high_x), paste0("High ",x_name, ","), high_x)
   low_x <- ifelse(is.null(low_x), paste0("Low ", x_name, ","), low_x)
@@ -189,7 +210,7 @@ select_cfs_deep_dive <- function(df,
       guide_asth <- guides(fill = "colorbar")
     }
     
-    p <- ggplot(df, aes(!!sym(x), 365.25 * !!sym(y), xmin = q25_x, xmax = q75_x, 
+    p <- ggplot(df, aes(!!sym(x), !!sym(y), xmin = q25_x, xmax = q75_x, 
                         ymin = q25_y, ymax = q75_y) ) + 
       geom_point(aes(shape = RCP, fill = !!sym(fill_var)), size = 4, stroke = 1) +
       #PlotTheme +
