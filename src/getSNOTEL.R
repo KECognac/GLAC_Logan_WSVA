@@ -4,7 +4,7 @@
 #' 
 #' @param aoi An sf polygon/multipolygon object, preferably a park boundary (or boundaries) retrieved from `getParkBoundary()`.
 #' @param dist The distance (in the same units as the aoi object) to buffer around park boundary
-#' @param years The years to pull data for. Default just pulls current year, but can be a string of years 
+#' @param years The years to pull data for. Default set to "all" which pulls all available years for each site, but can be a string of years 
 #' @param timeseries either 'Daily' or 'Hourly
 #' @param save Whether to save the resulting file (TRUE/FALSE)
 #' @param path If `save == TRUE`, the file path to save to
@@ -12,7 +12,7 @@
 getSNOTEL <-
   function(aoi,
            dist = 0,
-           years = substr(Sys.Date(), 1, 4),
+           years = "all",
            timeseries = "Daily",
            save = FALSE,
            path = NULL) {
@@ -42,11 +42,15 @@ getSNOTEL <-
                     Site,
                     State,
                     County = countyName,
+                    beginDate,
+                    endDate,
                     #Network,
                     Elevation_ft,
                     HUC,
                     #UNIT_CODE, # Only for Park Units
-                    geometry)
+                    geometry) %>%
+      dplyr::mutate(start_year = ifelse(years %in% c("all","All"), year(beginDate), min(as.numeric(years))),
+                    end_year = ifelse(years %in% c("all", "All"), year(Sys.Date()), max(as.numeric(years))))
     # add option to filter stations/vars that are logged up to a certain year?
     
     #download data for each site
@@ -56,7 +60,7 @@ getSNOTEL <-
     
     for (i in 1:length(siteID)) {
       dat[[i]] <- soilDB::fetchSCAN(site.code = siteID[i], 
-                                    year = years,
+                                    year = c(site_aoi[site_aoi$Site == siteID[i],]$start_year:site_aoi[site_aoi$Site == siteID[i],]$end_year),
                                     timeseries = "Daily") %>%
         map(~ mutate_all(., as.character)) %>%
         bind_rows() %>%
