@@ -1,0 +1,908 @@
+---
+title: "GLAC"
+author: "KEC"
+date: "2025-08-22"
+output: html_document
+---
+
+
+This R markdown prepares data and figures contained within the report, Climate Change Vulnerability Assessment for Water Supplies at Glacier National Park.
+
+### 1. Setup the workspace
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE,  message = FALSE, warning = FALSE, eval = TRUE)
+
+source('setup.R')
+
+mapviewOptions(fgb = FALSE, 
+               georaster = FALSE, 
+               basemaps = c("Esri.WorldTopoMap",
+                            "Esri.WorldImagery"))
+
+pal <- list(
+  black = "black", 
+  gold = "#dca237", 
+  lightblue = "#6eb2e4", 
+  teal = "#459a74", 
+  yellow = "#eee461", 
+  darkblue = "#3070ad", 
+  orange = "#c66426", 
+  pink = "#c07da5",
+  lightpink = "#ECD8E4"
+)
+
+nps_pal <-list(blue = "#85b6dc", 
+               red = "#c5312a", 
+               grey = "#a9a9a9", 
+               lightgrey = "#dcdcdc")
+
+
+load("data/park/GLAC/GLAC_data.RData")
+
+```
+
+Define park using 4-digit NPS Unit Code. Codes for all parks can be found at: <https://www.nps.gov/aboutus/foia/upload/NPS-Unit-List.xlsx>.
+
+Download the park boundary from the NPS IRMA DataStore as an {sf} object.
+
+```{r park_dat}
+park <- "GLAC"
+
+# Get park geometry and metadata
+park_boundary <- getParkBoundary(park = park)
+state <- park_boundary$STATE
+buildings <- getBuildings(park_boundary, dist = 0)
+```
+
+### 2. Identify the water supplies
+
+##### ---- Water Supply Database
+
+A water supply system database was created for this project using various NPS and public databases. The database contains a row for each water supply system and source of water (e.g., individual wells, diversions, and springs) associated with each supply.
+
+```{r}
+
+# Read in Water Supply Geodatabase
+table_path <- "data/Water_Supply_Systems/NPS_Water_Systems_Database_Joined.xlsx"
+
+source_table_locs <- read_excel(table_path, sheet = 1, na = "NA", skip = 1) %>%
+  as.data.frame() %>%
+      dplyr::filter(park_unit == park,
+                    !source_type %in% c("hauled","Hauled")) %>%
+     drop_na(c("source_longitude", "source_longitude")) %>%
+    st_as_sf(coords = (c("source_longitude","source_latitude")),
+           crs = 4326,
+            remove = FALSE) 
+
+select_sources <- source_table_locs %>% 
+  dplyr::filter(grepl("Logan|Sperry|Granite|Chalet", water_system_name)) 
+
+
+# get watersheds
+select_sources <- select_sources %>%
+  dplyr::mutate(watershed = 
+                  purrr::map(.x = 1:nrow(.),
+                             .f = ~ getXYWatersheds(sf = select_sources[.x,], 
+                                                    coordinates = NULL, 
+                                                    snap = FALSE)))
+
+a <- mapview(select_sources, col.regions = "tomato")
+
+#mapview(park_boundary, col.regions = "seagreen") +
+a# +
+#  mapview(select_sources$watershed %>% bind_rows,
+#          col.regions = "dodgerblue",
+#          alpha.regions = 0.4)
+
+
+```
+
+
+
+#### ----- Weather stations
+
+```{r}
+library(rnoaa)
+
+#get weather data for all stations (depending on dates and how many stations this can take a while)
+noaa <- getNOAA(st_buffer(park_boundary, 5000), "GLAC") %>% 
+  st_transform(4326)
+
+# Get list of stations with geospatial attributes
+stations <- noaa %>%
+  group_by(name) %>%
+  slice(1) %>% # Keep the first row within each group
+  ungroup()
+
+# Tidy data
+weather_data <- noaa %>%
+  dplyr::select(name, id, date, prcp, snow, snwd, tmax, tmin, tobs) %>%
+  # info stored as data * 10 for these params... so reconvert:
+  dplyr::mutate_at(c("tmax", "tmin", "prcp"), function(x) {x * 0.10}) %>%
+  # convert from mm to inches
+  dplyr::mutate_at(c("snow","snwd", "prcp"), function(x) {x * 0.0393701}) %>%
+  # convert from Celsius to Fahrenheit
+  dplyr::mutate_at(c("tmax","tmin"), function(x) {(9/5) * x + 32})
+
+# Summarize to monthly
+weather_data_mon <- weather_data %>%
+  st_drop_geometry() %>%
+  dplyr::mutate(ym = lubridate::ym(substr(date, 1, 7)),
+                Date = date,
+                year = year(date)) %>%
+  dplyr::group_by(ym, name, id) %>%
+  dplyr::summarize(tmax = max(tmax, na.rm = TRUE),
+                   tmin = min(tmin, na.rm = TRUE),
+                   tmean = mean(c(tmax,tmin), na.rm = TRUE),
+                   prcp = sum(prcp, na.rm = TRUE),
+                   snow = sum(snow, na.rm = TRUE),
+                   snwd = max(snwd, na.rm = TRUE)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(Date = ym) %>%
+   addWaterYear() %>%
+  dplyr::group_by(waterYear, name) %>%
+  dplyr::mutate(prcp_cum = cumsum(prcp),
+                   snow_cum = cumsum(snow),
+                   snwd_cum = cummax(snwd),
+                melt = snow_cum-snwd) # THis might be a stretch, but, technically,
+                                      # cumulative snow fall minus current snow
+                                      # depth should equal melt. Cumulative snow
+                                      
+# Summarize to annual
+weather_data_an <- weather_data %>%
+  st_drop_geometry() %>%
+  dplyr::mutate(Date = date,
+                year = year(date),
+                waterYear = calc_water_year(date, water_year_start_month = 10)) %>%
+  #addWaterYear() %>%
+  dplyr::group_by(waterYear, name, id) %>%
+  dplyr::summarize(tmax = mean(tmax, na.rm = TRUE),
+                   tmin = mean(tmin, na.rm = TRUE),
+                   tmean = mean(c(tmax,tmin), na.rm = TRUE),
+                   prcp = sum(prcp, na.rm = TRUE),
+                   snow = sum(snow, na.rm = TRUE),
+                   snwd = max(snwd, na.rm = TRUE)) 
+
+
+
+# Identify other nearby stations
+select_station_list <- c("USS0013A19S",
+                         #"USC00248486",
+                         "USS0013A27S"
+                         #"USC00245361"
+                         )
+
+mapview(stations %>% 
+          dplyr::filter(id %in% select_station_list), zcol = "elevation") + 
+  a
+
+# Show that blowhard station is a little higher elev than other stations
+mapview(stations %>% dplyr::filter(id %in% select_station_list) %>%
+          dplyr::mutate(elevation = elevation / .3048), # m to ft
+        zcol = "elevation",
+        layer.name = "Weather Station Elevation (ft)")
+
+# Plot blowhard mountain station along with a few other nearby stations
+p1 <- ggplot(weather_data_mon %>% dplyr::filter(id %in% select_station_list),
+       aes(x = ym, y = prcp, color = name)) + 
+  geom_point() +
+  geom_line() +
+  labs(x = "", y = "") +
+    scale_color_manual("", values = c(pal$lightblue, pal$pink, "seagreen", "tomato")) +
+  #geom_smooth(method = "lm", se = FALSE) +
+  theme_bw() 
+
+
+# Annual Precip
+ggplot(weather_data_an %>% 
+         dplyr::filter(id %in% select_station_list) %>%
+         pivot_longer(cols = c("tmax" ,"tmin" ,"tmean", "prcp", "snwd"),
+                      names_to = "vars",
+                      values_to = "vals"),
+       aes(x = waterYear, y = vals, color = name)) +
+  geom_point() +
+  geom_line() +
+  labs(x = "", y = "") +
+  scale_color_colorblind() +
+  theme_bw() + 
+  facet_wrap(~vars, scales = "free")
+
+
+
+
+```
+
+
+#### ----- SNOTEL
+
+Read in nearby SNOTEL sites and download and compare data to weather station.
+
+```{r snotel}
+
+snotel <- getSNOTEL(aoi = park_boundary, dist = 3000, years = "all") %>%
+  clean_names() %>%
+  st_transform(4326)
+
+snotel_sites <- snotel %>%
+  group_by(site) %>%
+  dplyr::slice(1) %>% 
+  ungroup()
+
+mapview(park_boundary, alpha.regions = 0.1) +
+  mapview(select_sources, col.regions = "red") +
+mapview(snotel_sites, col.regions = "darkblue") #+
+#  mapview(stations, col.regions = "seagreen")
+
+snotel_tidy <- snotel %>%
+  st_drop_geometry() %>%
+  dplyr::filter(sensor_id %in% c("PREC.I", "SNWD.I", "WTEQ.I")) %>%
+  dplyr::select(date, name, value, sensor_id, water_year) %>%
+  dplyr::group_by(date, name, sensor_id, water_year) %>%
+  dplyr::summarize(value = mean(value, na.rm = TRUE)) %>%
+  dplyr::ungroup() %>%
+  pivot_wider(names_from = sensor_id, values_from = value) %>% 
+  clean_names()
+
+snotel_m <- snotel_tidy %>%
+  plyr::mutate(ym = lubridate::ym(substr(date, 1, 7))) %>%
+  dplyr::group_by(ym) %>%
+  dplyr::summarize(snwd = max(snwd_i),
+                   prec = max(prec_i),
+                   wteq = max(wteq_i))
+
+snotel_annual <- snotel_tidy %>%
+  dplyr::group_by(name, water_year) %>%
+  dplyr::summarize(wteq = max(wteq_i),
+                   prec = sum(prec_i),
+                   snwd = max(snwd_i))
+
+# Just snotel fig
+ggplot(snotel_annual, aes(x = water_year, 
+                          y = wteq, 
+                          color = name, 
+                          fill = name)) +
+  geom_point() +
+  geom_line(alpha = 0.3) +
+  #geom_smooth(method = "lm", linetype = 2) +
+  theme_bw() +
+ scale_color_colorblind() +
+  scale_fill_colorblind()
+
+# Snotel + weather fig
+
+
+plot_dat <- weather_data_an %>% 
+         dplyr::filter(id %in% select_station_list,
+                       waterYear > 1983,
+                       waterYear < 2025) %>%
+       dplyr::rename("Snow Depth (Weather Station)" = snwd,
+                     "Max Temp (F)" = tmax) %>%
+        left_join(snotel_annual, by = c("waterYear" = "water_year", "name")) %>%
+         pivot_longer(cols = c("Max Temp (F)" ,
+                               "tmin" ,
+                               #"tmean", 
+                               "prcp", "prec",
+                               "Snow Depth (Weather Station)",
+                               "wteq"),
+                      names_to = "vars",
+                      values_to = "vals") %>%
+  dplyr::group_by(vars, name) %>%
+  dplyr::mutate(roll_vals = data.table::frollmean(vals, 5, align = c("right")))
+
+weather_fig <- ggplot(plot_dat) + 
+  geom_line(aes(x = waterYear, y = vals, color = name), lwd = 0.5) +
+  geom_line(aes(x = waterYear, y = roll_vals, group = name), 
+            lineend = "round", color = "black", lwd = 1.5) +
+  geom_line(aes(x = waterYear, y = roll_vals, color = name),
+            lineend = "round") +
+  theme_bw() +
+  scale_color_colorblind("") +
+  scale_fill_colorblind("") +
+  labs(y = "", x = "") + 
+  facet_wrap(~ vars,
+               #factor(vars, levels = c("Temperature (F)",
+              #                         "Precipitation (in)",
+              #                         "Rain (in)",
+               #                        "Snowmelt (in)",
+               #                        "AET (in)",
+              #                         "Runoff (in)",
+              #                         "Discharge (in)",
+               #                        "Recharge (in)")),
+             scales = "free", nrow = 2) + 
+  theme(legend.position = "bottom",
+        legend.margin = margin(t = -20, b = 0, l = 0, r = 0))
+
+
+weather_fig
+
+
+p_dat <- snotel_tidy %>%
+         dplyr::group_by(name, water_year) %>%
+         dplyr::mutate(water_year_day = row_number()) #%>%
+         #dplyr::ungroup()
+
+ggplotly(
+ggplot(p_dat %>% dplyr::mutate(group = ifelse(water_year < 2015, "< 2015",
+                                              ifelse(water_year < 2020, "2015-2020", "2020-2025"))), #dplyr::filter(name == "Flattop Mtn.",
+                  #             water_year %in% c(2023, 2024)),
+       aes(x = water_year_day, y = wteq_i, color = group, group = water_year)) +
+  geom_line(lwd = 1) +
+  labs(x = "Water Year Day", y = "SWE (in)") +
+  facet_wrap(~name, ncol = 1) +
+  theme_bw() +
+  scale_color_manual("", values = c("#bdd7e7", "#6baed6", "darkblue")
+  )
+)
+
+```
+
+
+
+#### ----- NWIS Surface Water
+
+For many parks, the nearest USGS stream gage is far away. Therefore, here we pull in all NWIS gages within 100 km of the park boundary. Of those, we only select stream gages that are considered "reference" gages in the [GAGES-II database (Falcone, 2011)](https://pubs.usgs.gov/publication/70046617). We then select the gage that is closest to the park with the most complete period of record and delineate its associated watershed using the `get_nldi_basin()` function from the {nhdplusTools} package.
+
+```{r nwis, eval = TRUE, message = FALSE, warning = FALSE}
+
+sf_use_s2(TRUE)
+
+# Get all NWIS sites
+nwis <- listNWIS(aoi = park_boundary, dist = 5000) 
+
+
+########################## Surface Water #######################################
+
+# Get NWIS Stream Gages - Note, this removes all relevant gages for Zion so not
+# adhering to reference gages only.
+ref_gages <- get_gagesII(id = unique(nwis$site_no)) %>%
+  dplyr::filter(class == "Ref")
+
+# Select by maximum record and distance from supply site
+nwis_select_stream_gage <- nwis %>%
+  dplyr::filter(site_no %in% ref_gages$staid,
+                data_type_cd == "dv",
+                code %in% c("00060", "00054")) 
+
+# Get watersheds associated with nearest stream gages
+nwis_select_watershed <- nwis_select_stream_gage$site_no %>%
+  purrr::map_dfr(~ nldi_finder(site_no = .)) %>%
+  dplyr::left_join(sf::st_drop_geometry(nwis_select_stream_gage), 
+                   by = "site_no") %>%
+  dplyr::mutate(drain_sqkm = st_area(geometry) %>% 
+                  set_units("km^2") %>% 
+                  as.numeric())
+
+# Load NHD flowlines and filter for specific reaches within the watershed. We
+# will use these to select subsets of the alluvium for a volume analysis.
+park_flowlines <- park_boundary %>%
+  st_buffer(4000) %>%
+  dplyr::summarize() %>%
+  mapNHDPlusHR() 
+
+
+# Download data from reference stream sites
+nwis_select_discharge <- 
+  dataRetrieval::readNWISdv(siteNumbers = nwis_select_stream_gage$site_no,
+                                                   parameterCd = '00060') %>% # IF WE ALSO WANT HEIGHT == '00065'
+  data.table() %>%
+  dplyr::rename("discharge" = "X_00060_00003",
+                "date" = "Date") %>%
+  dplyr::group_by(site_no, date, agency_cd, "X_00060_00003_cd") %>%
+  dplyr::summarize(discharge = mean(discharge)) %>%
+  #dplyr::filter(year(date) >= 1940) %>%
+  dplyr::group_by(site_no) %>%
+  dplyr::left_join(st_drop_geometry(nwis_select_watershed), by = "site_no") %>%
+  dplyr::mutate(discharge_in_nwis = 86400 * 12 * discharge / (drain_sqkm * 1.076e+7))
+  
+  
+nwis_select_discharge_an <- nwis_select_discharge %>%
+  dplyr::mutate(y = year(date),
+                wy = calc_water_year(date)) %>%
+  dplyr::group_by(wy, site_no) %>%
+  dplyr::summarize(mean_discharge = mean(discharge, na.rm = TRUE),
+                   mean_discharge_in_nwis = mean(discharge_in_nwis, na.rm = TRUE),
+                   peak_discharge = max(discharge, na.rm = TRUE),
+                   .groups = "keep")
+
+
+ggplot(nwis_select_discharge,
+       aes(x = date, y = discharge_in_nwis, color = site_no)) +
+  geom_line() +
+  geom_point() +
+  scale_color_colorblind() +
+  theme_bw() +
+ # scale_y_log10()
+facet_wrap(~site_no, scales = "free", ncol = 1)
+
+
+ggplot(nwis_select_discharge_an,
+       aes(x = wy, y = mean_discharge_in_nwis, color = site_no)) +
+  geom_line() +
+  geom_point() +
+  scale_color_colorblind() +
+  theme_bw() +
+  #scale_y_log10() +
+facet_wrap(~site_no, scales = "free", ncol = 1)
+
+
+```
+
+#### ----- NWIS Groundwater
+
+We also look at NWIS groundwater sites near the park
+
+```{r nwis_gw}
+############################## Groundwater #####################################
+
+nwis_groundwater <- nwis %>%
+  dplyr::filter(data_type_cd == "gw",
+                n_obs >= 5) %>%
+  add_gw_meta()
+
+# pull those sites groundwater level data and convert to monthly mean
+nwis_groundwater_levels <- dataRetrieval::readNWISgwl(nwis_groundwater$site_no) %>%
+  data.table::data.table() %>%
+  dplyr::filter(parameter_cd %in% c(62611, 72019),
+                year(as.Date(lev_dt)) >= 1900) %>% # 72019 = depth, 62611 = elevation
+  dplyr::mutate(ym = lubridate::ym(substr(lev_dt, 1, 7))) %>% 
+  dplyr::group_by(ym, site_no, parameter_cd) %>%
+  dplyr::summarize(mean_lev = mean(sl_lev_va, na.rm. = TRUE), # elevation
+                   mean_depth = mean(lev_va, na.rm. = TRUE), # depths
+                   .groups = "keep") %>%
+  dplyr::select(ym, site_no, mean_lev, mean_depth) %>%
+  dplyr::group_by(site_no) %>%
+  dplyr::mutate(dev_mean = mean_lev - mean(mean_lev, na.rm = TRUE))
+#tidyr::pivot_wider(names_from = site_no, names_prefix = "well_", 
+#values_from = mean_lev_va) #%>%
+
+ggplot(nwis_groundwater_levels %>% drop_na(mean_lev),# %>% dplyr::filter(site_no == 372744113133501), 
+       aes(x = ym, y = mean_lev, col = site_no)) + 
+  geom_point() + 
+  geom_line() +
+  theme_bw() +
+  facet_wrap(~site_no, scales = "free")
+
+
+############################# Water Quality ####################################
+
+wq_codes <- nwis %>% 
+  dplyr::filter(data_type_cd == "qw") %>%
+  distinct(code, .keep_all = TRUE)
+
+
+
+```
+
+
+### 4. Climate and Water Balance
+
+#### - GCM Selection
+
+Climate futures were previously compiled for park and Koppen centroids. This data was used to select which of the CMIP5 climate models to use to represent "hot dry" and "warm wet" scenarios. Here, we read in the pre-determined gcm selections. 
+
+```{r}
+
+# Read in selected "Hot dry" "Warm Wet" climate futures
+centroid_cfs <- data.table::fread('data/parkwide_gcms.csv') %>%
+  dplyr::filter(park %in% {{park}},
+                CF %in% c("Warm Wet", "Hot Dry")) %>%
+  distinct(GCM, .keep_all = TRUE)
+
+# If there is more than one model selection for a CF scenario, grab the more divergent.
+if (nrow(centroid_cfs) > 2) {
+  if (nrow(centroid_cfs %>% dplyr::filter(CF == "Hot Dry")) > 1) {
+    centroid_cfs <- centroid_cfs %>%
+      group_by(CF) %>%
+      slice_min(delta_pr)
+  }
+  if ((nrow(centroid_cfs %>% dplyr::filter(CF == "Warm Wet")) > 1) ) {
+    centroid_cfs <- centroid_cfs %>%
+      group_by(CF) %>%
+      slice_max(delta_pr)
+  }
+}
+
+
+# Read in all available gcms
+all_cfs <-
+  read_delim( "https://raw.githubusercontent.com/rossyndicate/CCRP_automated_climate_futures/master/data/general/GCM_skill_by_region.txt" ) %>%
+  dplyr::filter(Region == "SWR") %>% #,
+                #Rank < 19) %>%
+  dplyr::mutate(GCM = ifelse(GCM == "HadGEM2-ES.", "HadGEM2-ES365.", GCM),
+                GCM = ifelse(GCM == "HadGEM2-CC.", "HadGEM2-CC365.", GCM)) %>%
+  tidyr::crossing(data.table(RCP = c("rcp45","rcp85"))) %>%
+  dplyr::mutate(GCM = paste0(GCM,RCP)) %>% 
+  dplyr::mutate(Skill = ifelse(Rank > 18, "Low Skill", "High Skill"))
+  
+
+# GCMs available on amazon web services water balance model gridded datasets.
+    wbm_gcms <- data.frame("GCM" = c(
+      "inmcm4",
+      "NorESM1-M",
+      "MRI-CGCM3",
+      "MIROC5",
+      "MIROC-ESM-CHEM",
+      "IPSL-CM5A-LR",
+      "HadGEM2-CC365",
+      "GFDL-ESM2G",
+      "CanESM2",
+      "CSIRO-Mk3-6-0",
+      "CNRM-CM5",
+      "CCSM4",
+      "BNU-ESM"
+    )) %>%
+  tidyr::crossing(RCP = c("rcp45","rcp85")) %>%
+  dplyr::mutate(GCM = paste0(GCM, '.',RCP)) %>%
+  dplyr::select(-RCP)
+
+```
+
+
+#### - Download climate data
+Get historical (GridMET) and future (MACA GCMs) climate data for the water supply watershed (i.e., the source area for the BRCA water supply).
+
+```{r}
+
+recharge_aoi <- select_sources$watershed %>%
+  bind_rows() %>%
+  st_buffer(4500) %>%
+  dplyr::summarize() 
+
+mapview(recharge_aoi)
+
+# Get historical climate data for the Aquarius East fork of the Jemez River gage
+clim_hist <- get_climate_historic(sf = recharge_aoi %>% 
+                                   dplyr::mutate(name = "recharge_aoi"),
+                                  col_name = "name",
+                                  start = "1979-01-01",
+                                  end = "2023-12-31") %>%
+  dplyr::mutate(CF = "Historical",
+                GCM = "GridMET") 
+
+
+# Get future climate data for water source area for all GCMs 
+# TAKES > 1 hr -- ALready downloaded and import below
+#clim_fut <- get_climate_future(sf = recharge_area %>% dplyr::mutate(name = "recharge_area"),
+#                                      col_name = "name",
+#                                      start = "2024-01-01",
+#                                      end = "2100-12-31",
+#                                      GCM = all_cfs$GCM) %>%
+#  dplyr::mutate(GCM = paste0(GCM,'.',RCP)) %>%
+#  dplyr::left_join(all_cfs %>% dplyr::select(-"RCP"), by = "GCM") %>%
+#  dplyr::select(-c("Ensemble","RCP")) 
+#saveRDS(clim_fut, "data/park/CEBR/Climate_Data/clim_fut_all.rds")
+
+# Read in all future data (previously downloaded)
+clim_fut <- readRDS("data/park/CEBR/Climate_Data/clim_fut_all.rds") 
+
+clim_snotel <- get_climate_historic(sf = snotel_sites %>% dplyr::filter(site == "1154"),
+                                    col_name = "site",
+                                    start = "1979-01-01",
+                                    end = "2023-01-01") %>%
+  dplyr::mutate(CF = "Historical",
+                GCM = "GridMET")
+
+
+
+# Extract unique grid center points for each climate dataset
+clim_pts <- clim_hist %>% 
+  ungroup() %>% 
+  distinct(x,y, .keep_all = TRUE) %>% 
+  st_as_sf(coords = c("x","y"), crs = st_crs(4326), remove = FALSE) %>%
+  ungroup() %>%
+  dplyr::select(x,y)
+
+clim_fut_pts <- clim_fut %>% 
+  ungroup() %>% 
+  distinct(x, y, .keep_all = TRUE) %>% 
+  st_as_sf(coords = c("x","y"), crs = st_crs(4326), remove = FALSE) %>%
+  ungroup() %>%
+  dplyr::select("old_x" = x, "old_y" = y)
+
+snotel_pts <- clim_snotel %>%
+  ungroup() %>%
+  distinct(x,y, .keep_all = TRUE) %>% 
+  st_as_sf(coords = c("x","y"), crs = st_crs(4326), remove = FALSE) %>%
+  dplyr::select(x,y)
+
+# Because gridmet and MACA-CMIP5 points are slightly off, create updated single
+# set of points to use for both datasets - default to gridmet. This matters because
+# downstream, we're running a model that extracts soil properties, slope, 
+# aspect
+
+### KEC: There is an issue here----> notably, climateR is not returning corresponding
+# grid cells for gridmet and maca despite inputting the same AOI. Need to look into why!
+# Buffer here is set to 6000 but should intersect at 2000
+pts <- clim_pts %>%
+  st_buffer(6000) %>%
+  st_intersects(clim_fut_pts) %>%
+  imap_dfr(~ data.table(index_df1 = .y, index_df2 = .x)) %>%
+  right_join(clim_pts %>% mutate(index_df1 = row_number()) %>% st_drop_geometry(), by = "index_df1") %>%
+  left_join(clim_fut_pts %>% mutate(index_df2 = row_number()) %>% st_drop_geometry(), by = "index_df2") %>%
+  dplyr::select(-starts_with("index_")) %>%
+  st_as_sf(coords = c("x","y"), crs = st_crs(4326), remove = FALSE)
+
+mapview(recharge_area) +
+mapview(clim_fut_pts, col.regions = pal$gold) +
+  mapview(pts, col.regions = pal$yellow) +
+  #mapview(clim_pts, col.regions = pal$pink) +
+  mapview(st_bbox(st_buffer(pts, 2000)))
+
+# Reassign x and y as gridmet points (rather than cmip5)
+clim_fut <- clim_fut %>%
+  dplyr::rename("old_x"=x, "old_y" = y) %>%
+  left_join(pts %>% st_drop_geometry(), by = c("old_x", "old_y")) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-c(old_x, old_y))
+
+clim_all <- clim_hist %>%
+  bind_rows(clim_fut %>% dplyr::select(-c(Rank, Region, Skill)))
+
+
+```
+
+
+#### -  Run WBM
+
+We use the NPS water balance model (WBM) to calculate water budget components. The model requires temperature and precipitation inputs, which were previously downloaded for historical and projected periods. The water balance model is adapted from code base developed in NPS's {WaterBalance} package (https://github.com/CCRP-Adaptation/WaterBalance). 
+
+For our report, we ran the NPS water balance model (WBM) for each GridMET point in the source area and then aggregate the values to the area mean, returning a spatially averaged daily value. We are running the historical and future datasets separately for now because the point locations between the two datasets (GridMET and MACA) are slightly different. 
+
+
+```{r wbm_run}
+
+load_wbm_rasters(crs = crs(pts))
+
+# NPS set the default to 4 based on the hock et al publication but we found that
+# 2 matches up better with snow accumulation at snotel sites and calibrates better
+# during runoff routing calibrations. Will continue to test in new regions, but
+# for Colorad, Utah, New Mexico, 2 is best fit
+hock <- 2
+
+recharge_area_ft2 <- recharge_area %>% 
+  st_area() %>%
+  set_units("ft^2") %>%
+  as.numeric()
+
+recharge_wbm <- run_NPS_WBM_points(points = clim_pts,
+                         climate_data = clim_hist,
+                         #col_name = "GCM", # CSU ADDITION
+                         Direct_Frac = 0, # CSU ADDITION
+                         Return_Rate = 1, # CSU ADDITION
+                         PET_Method = "Oudin",
+                         hock_coef = hock,
+                         Snowpack.Init = 0, 
+                         Soil.Init = 0,
+                         Shade.Coeff = 1,
+                         T.Base = 0,
+                         Soil_mult = 1,
+                         PET_mult = 1,
+                         ret_final_cond = TRUE,
+                               use_final = FALSE) 
+
+final_cond <- recharge_wbm[[2]] %>%
+  dplyr::select(x,y,final_soil, final_snowpack)
+
+clim_pts <- clim_pts %>% 
+  dplyr::left_join(final_cond, by = c("x","y"))
+
+recharge_wbm <- recharge_wbm[[1]] %>%
+#  dplyr::left_join(jemez_discharge %>% 
+#                     dplyr::ungroup() %>% 
+#                     dplyr::select(date, discharge_cfs),# %>%
+#                   by = c("date")) %>%
+  # Discharge in inches per day
+  dplyr::mutate(runoff_cfs_wbm = (runoff_in_wbm / 12) * recharge_area_ft2 / 86400)
+    #discharge_in = discharge_cfs * 86400 * 12 / jemez_watershed_area)
+
+recharge_fut_wbm <- run_NPS_WBM_points(points = pts,
+                         climate_data = clim_fut,
+                         #col_name = "GCM", # CSU ADDITION
+                         Direct_Frac = .1, # CSU ADDITION
+                         Return_Rate = 1, # CSU ADDITION
+                         PET_Method = "Oudin",
+                         hock_coef = hock,
+                         Snowpack.Init = 0, 
+                         Soil.Init = 0,
+                         Shade.Coeff = 1,
+                         T.Base = 0,
+                         Soil_mult = 2,
+                         PET_mult = 1,
+                         ret_final_cond = FALSE,
+                         use_final = FALSE) %>%
+  dplyr::mutate(runoff_cfs_wbm = (runoff_in_wbm / 12) * recharge_area_ft2 / 86400)
+
+# test max infiltration rate - not used currently
+#max_inf <- .1 * (1/86400) * (1/12) * as.numeric((alluvium %>% st_area() %>% set_units("ft^2"))) # inches/day to cfs
+
+
+snotel_wbm <- run_NPS_WBM_points(points = snotel_pts,
+                         climate_data = clim_snotel,
+                         #col_name = "GCM", # CSU ADDITION
+                         Direct_Frac = .1, # CSU ADDITION
+                         Return_Rate = 1, # CSU ADDITION
+                         PET_Method = "Oudin",
+                         hock_coef = hock,
+                         Snowpack.Init = 0, 
+                         Soil.Init = 0,
+                         Shade.Coeff = 1,
+                         T.Base = 0,
+                         Soil_mult = 2,
+                         PET_mult = 1,
+                         ret_final_cond = FALSE,
+                               use_final = FALSE) 
+
+
+
+```
+
+
+Although we have centroid-selected GCMs to represent "Hot Dry" and "Warm Wet" climate futures, we may want to use different variables at some sites. ALso, the climate centroid does not necessarily overlap with the recharge area. Here, we run the same process that was run at the climate centroid to select 4 GCMs that represent "hot dry", "warm dry", "hot wet", and "warm wet" climate scenarios and then, of those, we select the hot dry and warm wet as spectrum end members for CEBR.
+
+First calculate differentials (future - baseline) for all climate & WBM data stats
+
+```{r}
+
+# wbm_all pre-routing
+wbm_all <- recharge_wbm %>%
+  #dplyr::select(-c(, discharge_cfs, runoff_cfs_wbm)) %>%
+  bind_rows(recharge_fut_wbm) %>%
+  as.data.table() %>%
+  left_join(all_cfs, by = "GCM")
+
+wbm_all_annual <- wbm_all %>%
+  dplyr::mutate(year = year(date)) %>%
+  dplyr::group_by(year,GCM, Rank, Region, RCP, Skill ) %>%
+  dplyr::summarize_all(.funs = \(x) mean(x, na.rm = TRUE))
+
+all_clim_stats <- wbm_all %>%
+  data.table() %>%
+  dplyr::mutate(year = year(date),
+                stat_period = 
+                  ifelse(year < 2013, "Baseline",
+                      ifelse(year > 2034 & year < 2065, "Future", "Other"))) %>%
+  dplyr::filter(!stat_period == "Other") %>%
+  dplyr::select(GCM, stat_period, Skill, precip_in_wbm, tmean_C, runoff_in_wbm, pet_in_wbm) %>%
+  dplyr::group_by(GCM, stat_period, Skill) %>%
+  dplyr::summarize(mean_precip_in = mean(precip_in_wbm),
+                   mean_tmean_C = mean(tmean_C),
+                   mean_runoff_in = mean(runoff_in_wbm),
+                   median_runoff_in = quantile(runoff_in_wbm, 0.75),
+                   sd_runoff_in = sd(runoff_in_wbm),
+                   cv_runoff_in = sd(runoff_in_wbm)/mean(runoff_in_wbm),
+                   iqr_runoff_in = as.numeric(quantile(runoff_in_wbm, 0.75)) - 
+                     as.numeric(quantile(runoff_in_wbm, 0.25)),
+                   q90_q10_runoff_in = as.numeric(quantile(runoff_in_wbm, 0.9)) -
+                     as.numeric(quantile(runoff_in_wbm, 0.1)),
+                   peak_runoff_in = max(runoff_in_wbm),
+                   mean_precip_minus_pet_in = mean(precip_in_wbm - pet_in_wbm),
+                   fract_zero_runoff = sum(runoff_in_wbm == 0) / n() ,
+                   .groups = "keep") 
+
+
+baseline <- all_clim_stats %>%
+  dplyr::filter(stat_period == "Baseline")
+
+future <- all_clim_stats %>%
+  dplyr::filter(!stat_period == "Baseline")
+
+future_differentials <- future %>%
+  dplyr::mutate(delta_precip_in = mean_precip_in - baseline$mean_precip_in,
+                delta_tmean_C = mean_tmean_C - baseline$mean_tmean_C,
+                delta_runoff_in = mean_runoff_in - baseline$mean_runoff_in,
+                delta_runoff_in_sd = sd_runoff_in - baseline$sd_runoff_in,
+                delta_runoff_in_cv = cv_runoff_in - baseline$cv_runoff_in,
+                delta_runoff_in_iqr = iqr_runoff_in - baseline$iqr_runoff_in,
+                delta_runoff_in_median = median_runoff_in - baseline$median_runoff_in,
+                delta_runoff_q90_q10 = q90_q10_runoff_in - baseline$q90_q10_runoff_in,
+                delta_runoff_in_peak = peak_runoff_in - baseline$peak_runoff_in,
+                delta_precip_minus_pet = mean_precip_minus_pet_in - baseline$mean_precip_minus_pet_in,
+                delta_fract_zero_runoff = fract_zero_runoff - baseline$fract_zero_runoff) %>%
+  dplyr::left_join(centroid_cfs %>% dplyr::select(GCM, CF), by = "GCM") %>%
+  dplyr::rename(c("centroid_cf" = CF)) %>%
+  dplyr::mutate(centroid_cf = ifelse(centroid_cf %in% c("Hot Dry","Warm Wet"), centroid_cf , 
+                            ifelse(Skill == "Low Skill", "Low Skill", "Other"))) %>%
+  dplyr::mutate(RCP = str_sub(GCM, -5))
+                          
+```
+
+
+Now, manually select climate future categories
+
+```{r}
+
+
+# Example selection 
+#x <- "delta_runoff_in"
+#y <- "delta_runoff_in_peak"
+#x_name <- "Runoff (in)"
+#y_name <- "Peak Runoff"
+#high_x = "Wet"
+#low_x = "Dry"
+#high_y = "More Variable"
+#low_y = "Less Variable"
+
+x <- "delta_tmean_C"
+y <- "delta_precip_in"
+x_name <- "Temperature (C)"
+y_name <- "Precipitation (in)"
+high_x = "Hot"
+low_x = "Warm"
+high_y = "Wet"
+low_y = "Dry"
+
+
+selected_gcms <- select_cfs_deep_dive(df = future_differentials, x, y, x_name, y_name, high_x, low_x, high_y, low_y, to_plot = TRUE)
+
+# Add to future_differentials
+future_differentials <- future_differentials %>% 
+  dplyr::left_join(selected_gcms[[1]] %>% 
+                     dplyr::filter(CF %in% c("Hot Dry", "Warm Wet")) %>% 
+                     dplyr::select(c(GCM, "select_CF" = CF)), by = "GCM") %>%
+  dplyr::mutate(GCM_Meta = case_when(centroid_cf == "Low Skill" ~ "Low Skill",
+                                     !is.na(select_CF) ~ select_CF,
+                                     TRUE ~ "Other")) # CF, GCM_Meta))
+
+
+```
+
+```{r Subset_WBM}
+# Subset wbm for only selected CFs
+
+wbm <- wbm_all %>%
+  dplyr::left_join(selected_gcms[[1]] %>% dplyr::filter(CF %in% c("Hot Dry", "Warm Wet")), by = "GCM") %>%
+  dplyr::mutate(CF = ifelse(year(date) < 2024, "Historical", CF)) %>%
+  dplyr::filter(CF %in% c("Hot Dry", "Warm Wet", "Historical")) %>%
+  dplyr::mutate(tmean_F = (9/5 * tmean_C) + 32)
+ 
+wbm_annual <- wbm_all_annual %>%
+  dplyr::left_join(selected_gcms[[1]] %>% dplyr::filter(CF %in% c("Hot Dry", "Warm Wet")), by = "GCM") %>%
+  dplyr::mutate(CF = ifelse(year < 2024, "Historical", CF)) %>%
+  dplyr::filter(CF %in% c("Hot Dry", "Warm Wet", "Historical")) %>%
+  dplyr::mutate(tmean_F = (9/5 * tmean_C) + 32)
+
+
+```
+
+# 5. Tables
+
+# 6. Figures
+
+
+##### Differentials Figure
+
+differentials bar chart - not officially in report yet so keeping here
+Note, fill = GCM_Meta shows CFS selected using the recharge area climate futures. fill = centroid_cf shows CFs selected using park centroid. Notably, selections are different AND neither selects the maximum runoff for the park. Interesting.... I wonder if this is related to a snow-dominated, higher elevation setting where the effects of PET are less pronounced on runoff and therefore what we actually want is just maximum P.
+
+```{r figure_3}
+
+diff_plot <- ggplot(future_differentials, aes(x = reorder(GCM, delta_runoff_in), 
+                                                   y = 365.25 * delta_runoff_in, 
+                                              fill = GCM_Meta)) +
+                                              #fill = centroid_cf)) +  
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  #theme(legend.position = "none") + 
+  labs(x = "", y = "Change in Annual Runoff (in)") +
+  theme(axis.text.x = element_text(angle = 76, vjust = 0.5, hjust=.5)) +
+  scale_fill_manual("", values = c(nps_pal$red,"black", "gray80", nps_pal$blue), na.value="gray85")
+
+diff_plot
+
+#gsave("docs/Deep Dives/CEBR/Figs/Diff_plot.tif", diff_plot, width = 7, height = 4,  dpi = 600)
+
+```
+
+
+
+# Save data
+```{r}
+
+save.image(file="data/park/GLAC/GLAC_data.RData")
+
+```
+
+
+
+
