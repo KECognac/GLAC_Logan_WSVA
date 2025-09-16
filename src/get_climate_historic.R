@@ -202,6 +202,30 @@ get_climate_historic <- function(sf,
                                    startDate = start,
                                    endDate = end)
       
+      if(return_grid == TRUE){
+        
+        point_grid <- climateR::getGridMET(AOI = sf::st_buffer(aoi, 4000),
+                                     varname = "tmmx",
+                                     startDate = "2000-01-01",
+                                     endDate = "2000-01-02")
+        
+        clim_crs <- terra::crs(point_grid[[1]])
+        
+        # transform AOI to match raster CRS if needed
+        if(sf::st_crs(aoi) != clim_crs) {
+          aoi_trans <- sf::st_transform(aoi, crs = clim_crs)
+        } else {
+          aoi_trans <- aoi
+        }
+        
+        assign("aoi_gridmet_grid", 
+               terra::as.polygons(point_grid[[1]], values = FALSE, dissolve = FALSE, na.rm = TRUE) %>%
+                 sf::st_as_sf() %>%
+                 .[aoi_trans,], 
+               envir = .GlobalEnv)
+        
+      }
+      
       all_climate_data[[i]] <- clim %>%
         data.table::data.table() %>%
         # since point pulls from gridMET do not provide the coordinates
