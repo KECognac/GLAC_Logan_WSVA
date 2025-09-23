@@ -9,8 +9,6 @@
 #' @param coordinates A numeric vectorcontaining longitude and latitude
 #'   coordinates (in that order). Only used if sf parameter is NULL. Default is NULL.
 #' @param crs The coordinate system of the coordinates if that approach is used. 
-
-
 getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = NULL){
   
   if(is.null(sf)){
@@ -132,28 +130,3 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = NULL){
   }
   
 }  
-
-# sf <- read_excel("data/Water_Supply_Systems/NPS_Water_Systems_Database_Joined_KW_Copy.xlsx", sheet = 1, na = c("NA","U"), skip = 1) %>%
-#   as.data.frame() %>%
-#   filter(!state %in% c("AK", "AS", "HI", "MP", "PR", "VI")) %>%
-#   filter(!source_type %in% c("Municipal", "Hauled")) %>%
-#   mutate(source_longitude = as.numeric(source_longitude),
-#          source_latitude = as.numeric(source_latitude)) %>%
-#   drop_na(source_latitude, source_longitude) %>%
-#   sf::st_as_sf(coords = (c("source_longitude","source_latitude")),
-#                crs = 4326) %>%
-#   #select(park_unit, wsd_source_id) %>%
-#   filter(park_unit == "VALL") #%>%
-#   #filter(grepl("chalet", water_system_name, ignore.case = TRUE))
-# 
-# ws <- vector("list", length = nrow(sf))
-# 
-# for(i in 1:nrow(sf)){
-# 
-#   try(ws[[i]] <- getXYWatersheds(sf = sf[i,]))
-#   Sys.sleep(2)
-# 
-# }
-# 
-# test = ws %>% bind_rows()
-# mapview(test) + sf
