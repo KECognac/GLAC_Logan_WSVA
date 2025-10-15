@@ -72,7 +72,13 @@ getSNOTEL <-
     
     final_data <- bind_rows(dat) %>%
       left_join(site_aoi, by = "Site") %>% #tie back to site metadata
-      st_as_sf()
+      st_as_sf() %>%
+      clean_names() %>%
+      mutate(
+        across(any_of(c("value", "elevation_ft", "depth", "water_year", "start_year", "end_year")), as.numeric),
+        across(any_of(c("date", "datetime")), as.Date)
+      )
+    
     
     
     if (save == TRUE) {
