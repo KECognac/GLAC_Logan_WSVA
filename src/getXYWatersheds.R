@@ -9,7 +9,7 @@
 #' @param coordinates A numeric vectorcontaining longitude and latitude
 #'   coordinates (in that order). Only used if sf parameter is NULL. Default is NULL.
 #' @param crs The coordinate system of the coordinates if that approach is used. 
-getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = NULL){
+getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = NULL, snap = FALSE){
   
   if(is.null(sf)){
     
@@ -35,71 +35,102 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = NULL){
     aoi <- aoi_raw
   }
   
-  # Get the NHDPlus flowline near the site and create a 30m buffer around it
-  # This is considered a "danger zone" to avoid placing points on the flowline
-  # if they aren't in fact on the flowline
-  flowline_danger_zone <- get_nhdplus(AOI = aoi, realization = "flowline") %>%
-    st_buffer(30)
-  
-  # is point on a small tributary? (ie too small for NHD flowlines)
-  if(is.na(as.numeric(st_intersects(aoi %>% st_buffer(100), flowline_danger_zone)))){
+  if(snap == FALSE){
+    # Get the NHDPlus flowline near the site and create a 30m buffer around it
+    # This is considered a "danger zone" to avoid placing points on the flowline
+    # if they aren't in fact on the flowline
+    flowline_danger_zone <- get_nhdplus(AOI = aoi, realization = "flowline") %>%
+      st_buffer(30)
     
-    
-    # If the site is known to be a small watershed but is still very near "main" flowline...
-    if(!is.na(as.numeric(st_intersects(aoi %>% st_buffer(35), flowline_danger_zone)))){
+    # is point on a small tributary? (ie too small for NHD flowlines)
+    if(is.na(as.numeric(st_intersects(aoi %>% st_buffer(100), flowline_danger_zone)))){
       
-      # create a 35m buffer around the site location
-      site_buffer <- aoi %>%
-        st_buffer(35) 
       
-      # get points from the buffer boundary while avoiding any along the flowline
-      boundary_points <- site_buffer %>%
-        st_boundary() %>%      
-        st_cast("POINT") %>%    
-        mutate(point_id = row_number()) %>%   
-        st_difference(., flowline_danger_zone) %>%  # remove points that fall within the flowline buffer
-        # reduce the number of points by taking only every 50th point
-        filter(point_id %% 50 == 0) %>%
-        bind_rows(aoi)  # add the original site point to the collection
-      
-      splits <- vector("list")
-      
-      # loop through each boundary point to get split catchments
-      for(i in 1:nrow(boundary_points)){
+      # If the site is known to be a small watershed but is still very near "main" flowline...
+      if(!is.na(as.numeric(st_intersects(aoi %>% st_buffer(35), flowline_danger_zone)))){
         
-        # Get the split catchment for each point
-        # We're looking for areas without a catchmentID (NA values)
-        splits[[i]] <- get_split_catchment(point = st_as_sfc(boundary_points[i,])) %>%
+        # create a 35m buffer around the site location
+        site_buffer <- aoi %>%
+          st_buffer(35) 
+        
+        # get points from the buffer boundary while avoiding any along the flowline
+        boundary_points <- site_buffer %>%
+          st_boundary() %>%      
+          st_cast("POINT") %>%    
+          mutate(point_id = row_number()) %>%   
+          st_difference(., flowline_danger_zone) %>%  # remove points that fall within the flowline buffer
+          # reduce the number of points by taking only every 50th point
+          filter(point_id %% 50 == 0) %>%
+          bind_rows(aoi)  # add the original site point to the collection
+        
+        splits <- vector("list")
+        
+        # loop through each boundary point to get split catchments
+        for(i in 1:nrow(boundary_points)){
+          
+          # Get the split catchment for each point
+          # We're looking for areas without a catchmentID (NA values)
+          splits[[i]] <- get_split_catchment(point = st_as_sfc(boundary_points[i,])) %>%
+            filter(is.na(catchmentID)) %>%
+            mutate(area = as.numeric(st_area(.)))  # Calculate the area
+        }
+        
+        # Combine all splits and select the largest one
+        splits <- bind_rows(splits) %>%
+          filter(as.numeric(area) == max(as.numeric(area))) %>%  # Keep only the largest area
+          select(-catchmentID,-id) 
+        
+        return(splits)
+        
+      } else {
+        
+        # If site is on small trib but far away from flowline
+        mini_ws <- get_split_catchment(point = st_as_sfc(aoi)) %>%
           filter(is.na(catchmentID)) %>%
-          mutate(area = as.numeric(st_area(.)))  # Calculate the area
+          mutate(area = as.numeric(st_area(.))) %>%
+          select(-catchmentID,-id)
+        
+        if(st_crs(mini_ws) != st_crs(aoi_raw)){
+          
+          mini_ws <- mini_ws %>% st_transform(crs = st_crs(aoi_raw)$epsg)
+          
+        }
+        
+        return(mini_ws)
+        
       }
-      
-      # Combine all splits and select the largest one
-      splits <- bind_rows(splits) %>%
-        filter(as.numeric(area) == max(as.numeric(area))) %>%  # Keep only the largest area
-        select(-catchmentID,-id) 
-      
-      return(splits)
       
     } else {
       
-      # If site is on small trib but far away from flowline
-      mini_ws <- get_split_catchment(point = st_as_sfc(aoi)) %>%
-        filter(is.na(catchmentID)) %>%
-        mutate(area = as.numeric(st_area(.))) %>%
-        select(-catchmentID,-id)
+      # Site is along flowline...
+      flowline <- get_nhdplus(AOI = aoi, realization = "flowline", t_srs = 4326)
       
-      if(st_crs(mini_ws) != st_crs(aoi_raw)){
+      # "Snap" our site to the nearest NHD flowline feature
+      nearest_points <- st_nearest_points(aoi, flowline)
+      
+      snapped_points_sf <- st_cast(nearest_points, "POINT")[2,]
+      
+      trace <- get_raindrop_trace(snapped_points_sf, direction = "down")
+      
+      raindrop <- sf::st_sfc(sf::st_point(trace$intersection_point[[1]][1:2]),
+                             crs = 4326)
+      # Clip/split our catchment to only include the portion of the
+      # catchment upstream of our site and grab whole watershed 
+      nhd_catch <- get_split_catchment(raindrop, upstream = T)[2,] %>%
+        mutate(area = as.numeric(st_area(.))) %>%
+        select(area)
+      
+      if(st_crs(nhd_catch) != st_crs(aoi_raw)){
         
-        mini_ws <- mini_ws %>% st_transform(crs = st_crs(aoi_raw)$epsg)
+        nhd_catch <- nhd_catch %>% st_transform(crs = st_crs(aoi_raw)$epsg)
         
       }
       
-      return(mini_ws)
-      
     }
     
-  } else {
+  }
+  
+  if(snap == TRUE){
     
     # Site is along flowline...
     flowline <- get_nhdplus(AOI = aoi, realization = "flowline", t_srs = 4326)
@@ -125,8 +156,10 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = NULL){
       
     }
     
-    return(nhd_catch)
     
   }
   
-}  
+  
+  return(nhd_catch)
+  
+}
