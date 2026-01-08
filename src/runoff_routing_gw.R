@@ -31,26 +31,24 @@
 runoff_routing_gw <- function(df, tau_q, tau_s, vs, delay = 0, loss, 
                               baseflow = 0, 
                               runoff_col = "runoff_in_wbm",
+                              date_col = "date",
                               return_components = FALSE,
                               slow_only = FALSE,
                               max_inf = 50) {
   
+  df <- data.table(df)
   
-  #df <- jemez_wbm
-  #runoff_col <- "runoff_cfs_wbm"
-  #tau_q <- 15
-  #tau_s <- 40
-  #vs <- .6
-  #delay <- 0
-  #loss <- .5
-  #baseflow <- 0
-  #slow_only <- FALSE
-  #return_components <- FALSE
+  # Ensure the input is a data.table for consistency and efficiency
+  if (!inherits(df, "data.table")) {
+    stop("Input 'df' must be a data.table.")
+  }
+  
+  setkeyv(df,date_col)
   
   stopifnot(all(c(tau_s, tau_q) >= 0))
   
   # Extract runoff data
-  runoff <- df[runoff_col]
+  runoff <- df[, get(runoff_col)]#df[runoff_col}}]
   
   # Calculate Parameters
   vq <- 1 - vs
@@ -94,6 +92,18 @@ runoff_routing_gw <- function(df, tau_q, tau_s, vs, delay = 0, loss,
     Xs <- (1-loss) * Xs
   }
   
+  
+  # --- Apply the specified delay to the flow components ---
+  # Using the stats package 'lag' function 
+  Xs <- stats::lag(Xs, delay)
+  Xq <- stats::lag(Xq, delay)
+  Xg <- stats::lag(Xg, delay)
+  
+  # Remove all timeseries attributes
+  attributes(Xs)$tsp <- NULL
+  attributes(Xq)$tsp <- NULL
+  attributes(Xg)$tsp <- NULL
+  
   # Total Flow
   Q_tot <- Xs + Xq + baseflow
   
@@ -110,7 +120,5 @@ runoff_routing_gw <- function(df, tau_q, tau_s, vs, delay = 0, loss,
   return(df_ret)
   
 }
-  
-  
   
   

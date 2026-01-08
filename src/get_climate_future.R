@@ -85,73 +85,46 @@ get_climate_future <- function(sf,
   
   if(any(GCM == "all")){
     
-    GCM <- c(
-      "HadGEM2-ES365.rcp45",
-      "HadGEM2-ES365.rcp85",
-      "HadGEM2-CC365.rcp45",
-      "HadGEM2-CC365.rcp85",
-      "CNRM-CM5.rcp45", 
-      "CNRM-CM5.rcp85",
-      "CCSM4.rcp45",
-      "CCSM4.rcp85",
-      "CanESM2.rcp45",
-      "CanESM2.rcp85",
-      "MIROC5.rcp45",
-      "MIROC5.rcp85",
-      "IPSL-CM5A-MR.rcp45",
-      "IPSL-CM5A-MR.rcp85",
-      "NorESM1-M.rcp45",
-      "NorESM1-M.rcp85",
-      "bcc-csm1-1-m.rcp45",
-      "bcc-csm1-1-m.rcp85",
-      "IPSL-CM5A-LR.rcp45",
-      "IPSL-CM5A-LR.rcp85",
-      "CSIRO-Mk3-6-0.rcp45",
-      "CSIRO-Mk3-6-0.rcp85",
-      "BNU-ESM.rcp45",
-      "BNU-ESM.rcp85",
-      "MRI-CGCM3.rcp45",
-      "MRI-CGCM3.rcp85",
-      "GFDL-ESM2M.rcp45",
-      "GFDL-ESM2M.rcp85",
-      "GFDL-ESM2G.rcp45",
-      "GFDL-ESM2G.rcp85",
-      "MIROC-ESM.rcp45",
-      "MIROC-ESM.rcp85",
-      "inmcm4.rcp45",
-      "inmcm4.rcp85",
-      "MIROC-ESM-CHEM.rcp45",
-      "MIROC-ESM-CHEM.rcp85",
-      "bcc-csm1-1.rcp45",
-      "bcc-csm1-1.rcp85",
-      "IPSL-CM5B-LR.rcp45",
-      "IPSL-CM5B-LR.rcp85", 
-      "inmcm4.rcp45",
-      "NorESM1-M.rcp45",
-      "MRI-CGCM3.rcp45",
-      "MIROC5.rcp45",
-      "MIROC-ESM-CHEM.rcp45",
-      "IPSL-CM5A-LR.rcp45",
-      "HadGEM2-CC365.rcp45",
-      "GFDL-ESM2G.rcp45",
-      "CanESM2.rcp45",
-      "CSIRO-Mk3-6-0.rcp45",
-      "CNRM-CM5.rcp45",
-      "CCSM4.rcp45",
-      "BNU-ESM.rcp45",
-      "inmcm4.rcp85",
-      "NorESM1-M.rcp85",
-      "MRI-CGCM3.rcp85",
-      "MIROC5.rcp85",
-      "MIROC-ESM-CHEM.rcp85",
-      "IPSL-CM5A-LR.rcp85",
-      "HadGEM2-CC365.rcp85",
-      "GFDL-ESM2G.rcp85",
-      "CanESM2.rcp85",
-      "CSIRO-Mk3-6-0.rcp85",
-      "CNRM-CM5.rcp85",
-      "CCSM4.rcp85",
-      "BNU-ESM.rcp85")
+    GCM  <- c("HadGEM2-ES365.rcp45", 
+              "HadGEM2-ES365.rcp85",
+              "HadGEM2-CC365.rcp45", 
+              "HadGEM2-CC365.rcp85", 
+              "CNRM-CM5.rcp45",      
+              "CNRM-CM5.rcp85",
+              "CCSM4.rcp45", 
+              "CCSM4.rcp85",
+              "CanESM2.rcp45",
+              "CanESM2.rcp85",       
+              "MIROC5.rcp45",
+              "MIROC5.rcp85",
+              "IPSL-CM5A-MR.rcp45",
+              "IPSL-CM5A-MR.rcp85", 
+              "NorESM1-M.rcp45",     
+              "NorESM1-M.rcp85",
+              "bcc-csm1-1-m.rcp45",
+              "bcc-csm1-1-m.rcp85",
+              "IPSL-CM5A-LR.rcp45",
+              "IPSL-CM5A-LR.rcp85",  
+              "CSIRO-Mk3-6-0.rcp45",
+              "CSIRO-Mk3-6-0.rcp85", 
+              "BNU-ESM.rcp45",
+              "BNU-ESM.rcp85",
+              "MRI-CGCM3.rcp45",     
+              "MRI-CGCM3.rcp85",
+              "GFDL-ESM2M.rcp45", 
+              "GFDL-ESM2M.rcp85",
+              "GFDL-ESM2G.rcp45",
+              "GFDL-ESM2G.rcp85",    
+              "MIROC-ESM.rcp45", 
+              "MIROC-ESM.rcp85", 
+              "inmcm4.rcp45", 
+              "inmcm4.rcp85",
+              "MIROC-ESM-CHEM.rcp45",
+              "MIROC-ESM-CHEM.rcp85",
+              "bcc-csm1-1.rcp45",
+              "bcc-csm1-1.rcp85", 
+              "IPSL-CM5B-LR.rcp45", 
+              "IPSL-CM5B-LR.rcp85") 
     
   }
   
@@ -175,19 +148,43 @@ get_climate_future <- function(sf,
         
         print(paste0('Downloading MACA ', models[j], '-', scenarios[j], ' for ', aoi$join_index, "."))
         
-        if(exact == TRUE){
+        if(exact == TRUE) {
           # download climate data using a 4km buffer to ensure full cell capture at aoi edges
           # getGridMET does NOT always grab all the grid cells that touch an AOI
-          clim <- climateR::getMACA(AOI = sf::st_buffer(aoi, 4000), 
-                                    varname = vars,
-                                    model = models[j],
-                                    scenario = scenarios[j],
-                                    startDate = start,
-                                    endDate = end) 
+          pull_aoi <- sf::st_buffer(aoi, 4000)
         } else {
           # download climate data NOT using a 4km buffer to ensure full cell capture at aoi edges
           # (how it was done in BRCA, VALL)
-          clim <- climateR::getMACA(AOI = aoi, 
+          pull_aoi <- aoi
+        }
+        
+        if (year(as.Date(start)) <= 2005 & year(as.Date(end)) > 2005) {
+          
+          # 2005 marks the start of RCP forcings. If start and end date span
+          # 2005-2006, need to pull in separately
+          clim_pre <- climateR::getMACA(AOI = pull_aoi, 
+                                        varname = vars,
+                                        model = models[j],
+                                        scenario = scenarios[j],
+                                        startDate = start,
+                                        endDate = "2005-12-31") #%>%
+          #  rename_with(
+          #    .fn = ~ stringr::str_replace(., "historical", scenarios[j]),
+          #    .cols = contains("historical") 
+          #  )
+          
+          clim_post <- climateR::getMACA(AOI = pull_aoi, 
+                                         varname = vars,#,"pet","vs"),
+                                         model = models[j],
+                                         scenario = scenarios[j],
+                                         startDate = "2006-01-01",
+                                         endDate = end) 
+          
+          clim <- c(clim_pre, clim_post) 
+        
+        } else {
+          
+          clim <- climateR::getMACA(AOI = pull_aoi, 
                                     varname = vars,
                                     model = models[j],
                                     scenario = scenarios[j],
@@ -244,7 +241,8 @@ get_climate_future <- function(sf,
                           tmin_C = tasmin - 273.15,
                           tmean_C = (tmax_C + tmin_C)/2,
                           join_index = aoi$join_index) %>%
-            dplyr::select(-c("tasmax","tasmin","pr"))
+            dplyr::select(-c("tasmax","tasmin","pr")) %>%
+            dplyr::mutate(RCP = str_replace(RCP, "historical", scenarios[j]))
           
         } else {
           
@@ -297,10 +295,10 @@ get_climate_future <- function(sf,
       # buffer by 800 m safely (transform to a meters-based CRS)
       points <- points %>%
         dplyr::mutate(rowid = nn_idx) %>%
-        left_join(st_drop_geometry(gridmet_points) %>% rowid_to_column() %>% select(x, y, rowid),
+        left_join(st_drop_geometry(gridmet_points) %>% rowid_to_column() %>% dplyr::select(x, y, rowid),
                   by = "rowid") %>%
         st_drop_geometry() %>%
-        select(-rowid)
+        dplyr::select(-rowid)
       
       all_climate_data <- all_climate_data %>%
         dplyr::left_join(points, by = c("x" = "old_x", "y" = "old_y")) %>%
@@ -330,12 +328,40 @@ get_climate_future <- function(sf,
         
         print(paste0('Downloading MACA for ', aoi$join_index, "."))
         
+        if (year(as.Date(start)) <= 2005 & year(as.Date(end)) > 2005) {
+          
+          # 2005 marks the start of RCP forcings. If start and end date span
+          # 2005-2006, need to pull in separately
+          clim_pre <- climateR::getMACA(AOI = aoi, 
+                                        varname = vars,#,"pet","vs"),
+                                        model = models[j],
+                                        scenario = scenarios[j],
+                                        startDate = start,
+                                        endDate = "2005-12-31") %>%
+            rename_with(
+              .fn = ~ stringr::str_replace(., "historical", scenarios[j]),
+              .cols = contains("historical") 
+            )
+          
+          clim_post <- climateR::getMACA(AOI = aoi, 
+                                         varname = vars,#,"pet","vs"),
+                                         model = models[j],
+                                         scenario = scenarios[j],
+                                         startDate = "2006-01-01",
+                                         endDate = end) 
+          
+          clim <- clim_pre %>%
+            bind_rows(clim_post) 
+          
+        } else {
+        
         clim <- climateR::getMACA(AOI = aoi, 
                                   varname = vars,#,"pet","vs"),
                                   model = models[j],
                                   scenario = scenarios[j],
                                   startDate = start,
                                   endDate = end) 
+        }
         
         all_climate_data[[idx]] <- clim %>%
           data.table::data.table() %>%

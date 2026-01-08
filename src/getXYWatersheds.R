@@ -9,6 +9,7 @@
 #' @param coordinates A numeric vectorcontaining longitude and latitude
 #'   coordinates (in that order). Only used if sf parameter is NULL. Default is NULL.
 #' @param crs The coordinate system of the coordinates if that approach is used. 
+#' @param snap Whether to snap the point to the nearest NHD flowline. Default is FALSE.
 getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = NULL, snap = FALSE){
   
   if(is.null(sf)){
@@ -72,6 +73,7 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = NULL, snap = FA
           # We're looking for areas without a catchmentID (NA values)
           splits[[i]] <- get_split_catchment(point = st_as_sfc(boundary_points[i,])) %>%
             filter(is.na(catchmentID)) %>%
+            st_make_valid() %>%
             mutate(area = as.numeric(st_area(.)))  # Calculate the area
         }
         
@@ -87,6 +89,7 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = NULL, snap = FA
         # If site is on small trib but far away from flowline
         mini_ws <- get_split_catchment(point = st_as_sfc(aoi)) %>%
           filter(is.na(catchmentID)) %>%
+          st_make_valid() %>%
           mutate(area = as.numeric(st_area(.))) %>%
           select(-catchmentID,-id)
         
@@ -117,6 +120,7 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = NULL, snap = FA
       # Clip/split our catchment to only include the portion of the
       # catchment upstream of our site and grab whole watershed 
       nhd_catch <- get_split_catchment(raindrop, upstream = T)[2,] %>%
+        st_make_valid() %>%
         mutate(area = as.numeric(st_area(.))) %>%
         select(area)
       
@@ -147,6 +151,7 @@ getXYWatersheds <- function(sf = NULL, coordinates = NULL, crs = NULL, snap = FA
     # Clip/split our catchment to only include the portion of the
     # catchment upstream of our site and grab whole watershed 
     nhd_catch <- get_split_catchment(raindrop, upstream = T)[2,] %>%
+      st_make_valid() %>%
       mutate(area = as.numeric(st_area(.))) %>%
       select(area)
     
