@@ -16,6 +16,7 @@ packageLoad <-
 packages <- c(
   "akima",
   "arcgisutils",
+  "arrow",
   "cowplot",
   "data.table",
   "dataRetrieval",
