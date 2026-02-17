@@ -18,6 +18,7 @@ packages <- c(
   "arcgisutils",
   "arrow",
   "cowplot",
+  "curl",
   "data.table",
   "dataRetrieval",
   "devtools",
@@ -67,6 +68,7 @@ packages <- c(
   "tmap",
   "units",
   "viridis",
+  "xml2",
   "zoo"
 )
 
