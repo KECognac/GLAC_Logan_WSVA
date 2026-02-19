@@ -16,7 +16,10 @@ packageLoad <-
 packages <- c(
   "akima",
   "arcgisutils",
+  "arrow",
+  "broom",
   "cowplot",
+  "curl",
   "data.table",
   "dataRetrieval",
   "devtools",
@@ -66,6 +69,7 @@ packages <- c(
   "tmap",
   "units",
   "viridis",
+  "xml2",
   "zoo"
 )
 
