@@ -17,6 +17,7 @@ packages <- c(
   "akima",
   "arcgisutils",
   "arrow",
+  "broom",
   "cowplot",
   "curl",
   "data.table",
