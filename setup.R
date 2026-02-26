@@ -25,6 +25,7 @@ packages <- c(
   "devtools",
   "dtplyr",
   "elevatr",
+  "exactextractr",
   "flextable",
   "furrr",
   "geojsonsf",
