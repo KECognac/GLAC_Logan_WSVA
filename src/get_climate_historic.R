@@ -61,6 +61,13 @@ get_climate_historic <- function(sf,
   
   all_climate_data <- vector("list", length = nrow(sf))
   
+  # Initiate empty grid list for returning one or multiple data grids
+  if (return_grid == TRUE){
+    grids <- vector("list", length = nrow(sf))
+    grids <- grids %>% setNames(sf$join_index)
+  }
+  
+  
   if(any(unique(sf::st_geometry_type(sf)) %in% c("POLYGON", "MULTIPOLYGON"))){
     
     for (i in 1:nrow(sf)) {
@@ -99,11 +106,10 @@ get_climate_historic <- function(sf,
         
         if(return_grid == TRUE){
           
-          assign("aoi_gridmet_grid", 
-                 terra::as.polygons(clim[[1]], values = FALSE, dissolve = FALSE, na.rm = TRUE) %>%
-                   sf::st_as_sf() %>%
-                   .[aoi_trans,], 
-                 envir = .GlobalEnv)
+          grids[[i]] <- terra::as.polygons(clim[[1]], values = FALSE, dissolve = FALSE, na.rm = TRUE) %>%
+                     sf::st_as_sf() %>%
+                     .[aoi_trans,]
+          
           
         }
         
@@ -143,14 +149,14 @@ get_climate_historic <- function(sf,
             dplyr::group_by(x, y, date) %>%
             tidyr::pivot_wider(names_from = "var", values_from = "val") %>%
             dplyr::mutate(date = as.Date(date),
-                          ppt_mm = pr,
-                          tmax_C = tmmx - 273.15,
-                          tmin_C = tmmn - 273.15,
+                          ppt_mm = if("pr" %in% names(.)) {pr} else {NA_real_},
+                          tmax_C = if("tmmx" %in% names(.)) {tmmx - 273.15} else {NA_real_},
+                          tmin_C = if("tmmn" %in% names(.)) {tmmn - 273.15} else {NA_real_},
                           tmean_C = (tmax_C + tmin_C)/2,
                           join_index = aoi$join_index,
                           area_weight = NA) %>%
-            dplyr::select(-c(tmmx, tmmn, pr))
-          
+            dplyr::select(-any_of(c("tmmx", "tmmn", "pr")))
+         
         }
         
       } else {
@@ -166,16 +172,16 @@ get_climate_historic <- function(sf,
                         y =  sf::st_coordinates(sf::st_centroid(aoi))[[2]]) %>%
           # Then do all other cleaning steps done for polygon sf objects:
           dplyr::mutate(date = as.Date(date),
-                        ppt_mm = pr,
-                        tmax_C = tmmx - 273.15,
-                        tmin_C = tmmn - 273.15,
+                        ppt_mm = if("pr" %in% names(.)) {pr} else {NA_real_},
+                        tmax_C = if("tmmx" %in% names(.)) {tmmx - 273.15} else {NA_real_},
+                        tmin_C = if("tmmn" %in% names(.)) {tmmn - 273.15} else {NA_real_},
                         tmean_C = (tmax_C + tmin_C)/2,
                         join_index = aoi$join_index,
                         # for a single grid cell fract of total aoi area divided 
                         # by 4km grid cell. Not really important tho since no 
                         # weighting really needed for these.
                         area_weight = ifelse(exact, NA, as.numeric(sf::st_area(aoi_trans)/4000000))) %>%
-          dplyr::select(-c(tmmx, tmmn, pr))
+          dplyr::select(-any_of(c("tmmx", "tmmn", "pr")))
         
       }
     }
@@ -218,11 +224,9 @@ get_climate_historic <- function(sf,
           aoi_trans <- aoi
         }
         
-        assign("aoi_gridmet_grid", 
-               terra::as.polygons(point_grid[[1]], values = FALSE, dissolve = FALSE, na.rm = TRUE) %>%
-                 sf::st_as_sf() %>%
-                 .[aoi_trans,], 
-               envir = .GlobalEnv)
+        grids[[i]] <- terra::as.polygons(point_grid[[1]], values = FALSE, dissolve = FALSE, na.rm = TRUE) %>%
+                   sf::st_as_sf() %>%
+                   .[aoi_trans,]
         
       }
       
@@ -251,6 +255,12 @@ get_climate_historic <- function(sf,
     
     # Rename the join_index column
     colnames(all_climate_data)[colnames(all_climate_data) == "join_index"] <- {{col_name}}
+    
+    if (return_grid == TRUE) {
+      assign("aoi_gridmet_grid", 
+           grids %>% bind_rows(.id = col_name), 
+           envir = .GlobalEnv)
+    }
     
     return(all_climate_data)
     
