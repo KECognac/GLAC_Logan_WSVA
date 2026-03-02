@@ -66,6 +66,8 @@
 #'   with final soil and snowpack conditions. Required when `use_final = TRUE`.
 #'   When provided, skips parameter derivation via `get_nps_wbm_params()`.
 #'   Default `NULL`.
+#' @param aggregate If TRUE, summarizes each variable for AOI after running. If 
+#'   FALSE, returns water balance results for each grid cell retaining x and y
 #'   
 #' @return When `ret_final_cond = FALSE`, returns a data frame of daily water
 #'   balance results averaged across points (or area-weighted when 
@@ -92,7 +94,8 @@ run_NPS_WBM_points <- function(points,
                                grid = NULL,
                                ret_final_cond = FALSE,
                                use_final = FALSE,
-                               param_list = NULL) {
+                               param_list = NULL,
+                               aggregate = TRUE) {
   
  if(use_final == TRUE){
    
@@ -179,23 +182,33 @@ run_NPS_WBM_points <- function(points,
       
     }
     
-    if(area_weighted == TRUE){
+    if (area_weighted == TRUE) {
     # Summarize daily values for each point    
     DailyWB_all[[j]] <- DailyWB_pts %>%
       dplyr::bind_rows() %>%
       dplyr::group_by(date, vars, GCM) %>%
-      dplyr::mutate(area_weight_norm = area_weight / sum(area_weight, na.rm = TRUE)) %>%
-      dplyr::summarize(vals = weighted.mean(vals, w = area_weight_norm, na.rm = TRUE), .groups = "drop")
+      dplyr::mutate(area_weight_norm = area_weight / sum(area_weight, na.rm = TRUE)) 
     
-    } else {
-    # Summarize daily values for each point    
-    DailyWB_all[[j]] <- DailyWB_pts %>%
-      dplyr::bind_rows() %>%
-      dplyr::group_by(date, vars, GCM) %>%
-      dplyr::select(-c(x, y)) %>%
-      dplyr::summarize(vals = mean(vals, na.rm = TRUE), .groups = "drop") 
+      if (aggregate == TRUE) {
+        DailyWB_all[[j]] <- DailyWB_all[[j]] %>%
+          dplyr::summarize(vals = weighted.mean(vals, w = area_weight_norm, na.rm = TRUE), .groups = "drop")
+
+      }
+      
+      } else {
+    
+      # Summarize daily values for each point    
+      DailyWB_all[[j]] <- DailyWB_pts %>%
+        dplyr::bind_rows() 
+    
+      if (aggregate == TRUE) {
+        DailyWB_all[[j]] <- DailyWB_all[[j]] %>%
+          dplyr::group_by(date, vars, GCM) %>%
+          dplyr::select(-c(x, y)) %>%
+          dplyr::summarize(vals = mean(vals, na.rm = TRUE), .groups = "drop") 
+        }
+    
     }
-    
     
   }
   
