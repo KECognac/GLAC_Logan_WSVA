@@ -68,6 +68,7 @@ packages <- c(
   "terra",
   "tigris",
   "tmap",
+  "trend",
   "units",
   "viridis",
   "xml2",
