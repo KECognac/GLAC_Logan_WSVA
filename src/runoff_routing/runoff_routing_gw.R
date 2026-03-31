@@ -19,7 +19,7 @@
 #' @param tau_q: Recession coefficient for quickflow (time unit of runoff)
 #' @param tau_s: Recession coefficient for slowflow (time unit of runoff)
 #' @param vs: Fraction of effective rainfall that goes to slowflow (-)
-#' @param loss: Fraction of slow flow that goes to groundwater recharge (-)
+#' @param loss: Fraction of slow flow that goes to groundwater recharge (-) (default: 0)
 #' @param baseflow: Constant baseflow value added to discharge representing "fossil GW" (default: 0)
 #' @param Delay: applied to quickflow (default: 0)
 #' @param return_components: Logical indicating return of separate components (default: FALSE)
@@ -28,7 +28,7 @@
 #' @return Dataframe containing the total routed flow (Q_tot).
 #'         If return_components is TRUE, also includes Q_slow, Q_quick, and Q_gw_recharge.
 
-runoff_routing_gw <- function(df, tau_q, tau_s, vs, delay = 0, loss, 
+runoff_routing_gw <- function(df, tau_q, tau_s, vs, delay = 0, loss = 0, 
                               baseflow = 0, 
                               runoff_col = "runoff_in_wbm",
                               date_col = "date",
@@ -36,89 +36,65 @@ runoff_routing_gw <- function(df, tau_q, tau_s, vs, delay = 0, loss,
                               slow_only = FALSE,
                               max_inf = 50) {
   
-  df <- data.table(df)
-  
-  # Ensure the input is a data.table for consistency and efficiency
+  # Ensure input is data.table
   if (!inherits(df, "data.table")) {
-    stop("Input 'df' must be a data.table.")
+    df <- as.data.table(df)
   }
   
-  setkeyv(df,date_col)
-  
+  setkeyv(df, date_col)
   stopifnot(all(c(tau_s, tau_q) >= 0))
   
   # Extract runoff data
-  runoff <- df[, get(runoff_col)]#df[runoff_col}}]
+  runoff <- df[[runoff_col]]
   
   # Calculate Parameters
   vq <- 1 - vs
   alpha_s <- exp(-1 / tau_s)
   alpha_q <- exp(-1 / tau_q)
-  beta_s <- vs*(1 - alpha_s)
-  beta_q <- vq*(1 - alpha_q)
-
-  # Set delay to whole num if not
+  beta_s <- vs * (1 - alpha_s)
+  beta_q <- vq * (1 - alpha_q)
+  
   delay <- round(delay, 0)
   
   # Initialize storage vectors
-  Xs_0 <- 0 
-  Xq_0 <- 0
-  Xs <- Xq <- Xgw <- vector(mode = "numeric", length = nrow(df))
+  Xs <- Xq <- vector(mode = "numeric", length = nrow(df))
   
-  # Slow flow 
-  Xs[] <- stats::filter(beta_s * runoff, 
-                         alpha_s, 
-                         method = "recursive", 
-                         init = Xs_0) 
+  # 1. Generate Flow Components
+  Xs[] <- stats::filter(beta_s * runoff, alpha_s, method = "recursive", init = 0) 
+  Xq[] <- stats::filter(beta_q * runoff, alpha_q, method = "recursive", init = 0)
   
-  
-  # Quick flow 
-  Xq[] <- stats::filter(beta_q * runoff, 
-                         alpha_q, 
-                         method = "recursive", 
-                         init = Xq_0)
-  
-  # Partition slowflow to groundwater (depending on options)
-  if (slow_only == TRUE) {
-    Xg <- loss*Xs
-    #exceeds_threshold <- ifelse(Xg > max_inf, Xg, 0)
+  # 2. Partition slowflow/quickflow to groundwater (Loss)
+  if (slow_only) {
+    Xg <- loss * Xs
     Xg[Xg > max_inf] <- max_inf
-    
     Xs <- Xs - Xg
-    
-  } else if (slow_only == FALSE) {
+  } else {
     Xg <- loss * (Xq + Xs)
-    Xq <- (1-loss) * Xq
-    Xs <- (1-loss) * Xs
+    Xq <- (1 - loss) * Xq
+    Xs <- (1 - loss) * Xs
   }
   
-  
-  # --- Apply the specified delay to the flow components ---
-  # Using the stats package 'lag' function 
-  Xs <- stats::lag(Xs, delay)
-  Xq <- stats::lag(Xq, delay)
-  Xg <- stats::lag(Xg, delay)
-  
-  # Remove all timeseries attributes
-  attributes(Xs)$tsp <- NULL
-  attributes(Xq)$tsp <- NULL
-  attributes(Xg)$tsp <- NULL
+  # 3. Apply the Delay (The Fix)
+  # data.table::shift physically moves the values. 
+  # fill = 0 ensures we don't get NAs at the start of the record.
+  if (delay > 0) {
+    Xs <- data.table::shift(Xs, n = delay, fill = 0, type = "lag")
+    Xq <- data.table::shift(Xq, n = delay, fill = 0, type = "lag")
+    Xg <- data.table::shift(Xg, n = delay, fill = 0, type = "lag")
+  }
   
   # Total Flow
   Q_tot <- Xs + Xq + baseflow
   
-  # Create output dataframe
-  df_ret <- data.frame(date = df$date, Q_tot)
-  #df_ret <- data.frame(Q_tot)
+  # Create output
+  df_ret <- data.frame(date = df[[date_col]], Q_tot = Q_tot)
   
-  # Add separate components if requested
-  if (return_components == TRUE) {
-    df_ret <- df_ret %>% 
-      bind_cols(Q_slow = Xs, Q_quick = Xq, Q_gw_recharge = Xg)
+  if (return_components) {
+    df_ret$Q_slow <- Xs
+    df_ret$Q_quick <- Xq
+    df_ret$Q_gw_recharge <- Xg
   }
   
   return(df_ret)
-  
 }
-  
   

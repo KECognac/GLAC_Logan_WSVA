@@ -35,23 +35,33 @@ getSNOTEL <-
     #filter to park
     site_aoi <- sites %>%
       st_transform(st_crs(aoi)) %>%
-      st_filter(aoi) %>%
-      distinct(Site, .keep_all = TRUE) %>%
-      sf::st_join(aoi) %>%
-      dplyr::select(Name,
-                    Site,
-                    State,
-                    County = countyName,
-                    beginDate,
-                    endDate,
-                    #Network,
-                    Elevation_ft,
-                    HUC,
-                    #UNIT_CODE, # Only for Park Units
-                    geometry) %>%
-      dplyr::mutate(start_year = ifelse(years %in% c("all","All"), year(beginDate), min(as.numeric(years))),
-                    end_year = ifelse(years %in% c("all", "All"), year(Sys.Date()), max(as.numeric(years))))
-    # add option to filter stations/vars that are logged up to a certain year?
+      st_filter(aoi) 
+    
+    # Check if any sites exist in AOI; if not, exit early
+    if (nrow(site_aoi) > 0) {
+      site_aoi <- site_aoi %>%
+        distinct(Site, .keep_all = TRUE) %>%
+        # Join with aoi but rename potential 'Name' column in aoi to avoid conflict
+        sf::st_join(aoi, suffix = c("_site", "_aoi")) %>%
+        dplyr::select(
+          # We explicitly pull Name_site (the station name)
+          Station_Name = matches("^Name_site$|^Name$"), 
+          Site,
+          State,
+          County = countyName,
+          beginDate,
+          endDate,
+          Elevation_ft,
+          HUC,
+          geometry
+        ) %>%
+        dplyr::mutate(
+          start_year = ifelse(years %in% c("all", "All"), lubridate::year(beginDate), min(as.numeric(years))),
+          end_year = ifelse(years %in% c("all", "All"), lubridate::year(Sys.Date()), max(as.numeric(years)))
+        )
+    } else {
+      return(message("No SNOTEL sites within input AOI. Try increasing buffer or input another AOI."))
+    }
     
     #download data for each site
     siteID <- unique(site_aoi$Site)
@@ -59,14 +69,21 @@ getSNOTEL <-
     dat <- vector("list", length(siteID))
     
     for (i in 1:length(siteID)) {
-      dat[[i]] <- soilDB::fetchSCAN(site.code = siteID[i], 
-                                    year = c(site_aoi[site_aoi$Site == siteID[i],]$start_year:site_aoi[site_aoi$Site == siteID[i],]$end_year),
-                                    timeseries = "Daily") %>%
-        map(~ mutate_all(., as.character)) %>%
-        bind_rows() %>%
-        as_tibble() %>%
-        #remove metadata columns
-        dplyr::select(-(Name:pedlabsampnum))
+      # Wrapped in tryCatch just in case a single site fetch fails
+      dat[[i]] <- tryCatch({
+        soilDB::fetchSCAN(
+          site.code = siteID[i], 
+          year = c(site_aoi[site_aoi$Site == siteID[i],]$start_year:site_aoi[site_aoi$Site == siteID[i],]$end_year),
+          timeseries = timeseries
+        ) %>%
+          purrr::map(~ dplyr::mutate_all(., as.character)) %>%
+          dplyr::bind_rows() %>%
+          tibble::as_tibble() %>%
+          dplyr::select(-(Name:pedlabsampnum)) 
+      }, error = function(e) {
+        message(paste("Failed to pull data for site:", siteID[i]))
+        return(NULL)
+      })
     }
     
     
