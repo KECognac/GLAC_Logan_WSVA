@@ -63,6 +63,7 @@ packages <- c(
   "rvest",
   "scales",
   "sf",
+  "soilDB",
   "SPEI",
   "stars",
   "terra",
