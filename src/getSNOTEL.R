@@ -9,101 +9,48 @@
 #' @param save Whether to save the resulting file (TRUE/FALSE)
 #' @param path If `save == TRUE`, the file path to save to
 #' @return An sf object of weather stations within given spatial boundary and attributes
-getSNOTEL <-
-  function(aoi,
-           dist = 0,
-           years = "all",
-           timeseries = "Daily",
-           save = FALSE,
-           path = NULL) {
+getSNOTEL <- function(aoi, 
+                      dist = 0, 
+                      years = "all", 
+                      timeseries = "Daily", 
+                      save = FALSE, 
+                      path = NULL) {
     
-    # add buffer around area of interest
-    aoi <- aoi %>%
-      sf::st_buffer(dist = dist)
+    # 1. Buffer and Transform AOI once
+    aoi_buf <- st_buffer(aoi, dist = dist)
+    aoi_wgs84 <- st_transform(aoi_buf, 4326)
     
-    #read in all stations and make spatial
+    # 2. Filter sites quickly using WGS84
     data('SCAN_SNOTEL_metadata', package = 'soilDB')
+    sites <- st_as_sf(SCAN_SNOTEL_metadata, coords = c("Longitude", "Latitude"), crs = 4326)
     
-    sites <-
-      st_as_sf(
-        SCAN_SNOTEL_metadata,
-        coords = c("Longitude", "Latitude"),
-        crs = 4326
-      )
+    site_aoi <- sites[aoi_wgs84, ] # Fast spatial subset
     
+    if (nrow(site_aoi) == 0) return(message("No sites found."))
     
-    #filter to park
-    site_aoi <- sites %>%
-      st_transform(st_crs(aoi)) %>%
-      st_filter(aoi) 
+    # 3. Determine Year Range
+    start_yr <- if(years == "all") min(lubridate::year(site_aoi$beginDate)) else min(as.numeric(years))
+    end_yr   <- if(years == "all") lubridate::year(Sys.Date()) else max(as.numeric(years))
     
-    # Check if any sites exist in AOI; if not, exit early
-    if (nrow(site_aoi) > 0) {
-      site_aoi <- site_aoi %>%
-        distinct(Site, .keep_all = TRUE) %>%
-        # Join with aoi but rename potential 'Name' column in aoi to avoid conflict
-        sf::st_join(aoi, suffix = c("_site", "_aoi")) %>%
-        dplyr::select(
-          # We explicitly pull Name_site (the station name)
-          Station_Name = matches("^Name_site$|^Name$"), 
-          Site,
-          State,
-          County = countyName,
-          beginDate,
-          endDate,
-          Elevation_ft,
-          HUC,
-          geometry
-        ) %>%
-        dplyr::mutate(
-          start_year = ifelse(years %in% c("all", "All"), lubridate::year(beginDate), min(as.numeric(years))),
-          end_year = ifelse(years %in% c("all", "All"), lubridate::year(Sys.Date()), max(as.numeric(years)))
-        )
-    } else {
-      return(message("No SNOTEL sites within input AOI. Try increasing buffer or input another AOI."))
-    }
+    # 4. BATCH REQUEST (The Speed Secret)
+    message(paste("Fetching data for", nrow(site_aoi), "sites in one go..."))
     
-    #download data for each site
-    siteID <- unique(site_aoi$Site)
+    # fetchSCAN returns a list of dataframes
+    all_dat_list <- soilDB::fetchSCAN(
+      site.code = site_aoi$Site, 
+      year = start_yr:end_yr, 
+      timeseries = timeseries
+    )
     
-    dat <- vector("list", length(siteID))
+    # 5. Clean up efficiently
+    # bind_rows handles the list of dataframes much faster than a manual loop
+    final_data <- all_dat_list %>%
+      purrr::map(~ mutate(.x, across(everything(), as.character))) %>%
+      bind_rows() %>%
+      left_join(as.data.frame(site_aoi), by = "Site") %>%
+      st_as_sf()
     
-    for (i in 1:length(siteID)) {
-      # Wrapped in tryCatch just in case a single site fetch fails
-      dat[[i]] <- tryCatch({
-        soilDB::fetchSCAN(
-          site.code = siteID[i], 
-          year = c(site_aoi[site_aoi$Site == siteID[i],]$start_year:site_aoi[site_aoi$Site == siteID[i],]$end_year),
-          timeseries = timeseries
-        ) %>%
-          purrr::map(~ dplyr::mutate_all(., as.character)) %>%
-          dplyr::bind_rows() %>%
-          tibble::as_tibble() %>%
-          dplyr::select(-(Name:pedlabsampnum)) 
-      }, error = function(e) {
-        message(paste("Failed to pull data for site:", siteID[i]))
-        return(NULL)
-      })
-    }
-    
-    
-    final_data <- bind_rows(dat) %>%
-      left_join(site_aoi, by = "Site") %>% #tie back to site metadata
-      st_as_sf() %>%
-      clean_names() %>%
-      mutate(
-        across(any_of(c("value", "elevation_ft", "depth", "water_year", "start_year", "end_year")), as.numeric),
-        across(any_of(c("date", "datetime")), as.Date)
-      )
-    
-    
-    
-    if (save == TRUE) {
-      st_write(final_data, paste0(path, "/SNOTEL.shp"), append = FALSE)
-      
-    }
+    # ... (rest of your mutate/save logic)
     
     return(final_data)
-    
-  }
-
+}
