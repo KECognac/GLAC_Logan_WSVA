@@ -29,8 +29,15 @@ getSNOTEL <- function(aoi,
     if (nrow(site_aoi) == 0) return(message("No sites found."))
     
     # 3. Determine Year Range
-    start_yr <- if(years == "all") min(lubridate::year(site_aoi$beginDate)) else min(as.numeric(years))
-    end_yr   <- if(years == "all") lubridate::year(Sys.Date()) else max(as.numeric(years))
+    # We use years[1] to check the first element of the input
+    if (years[1] == "all") {
+      start_yr <- min(lubridate::year(site_aoi$beginDate), na.rm = TRUE)
+      end_yr   <- celebrate::year(Sys.Date())
+    } else {
+      # If it's a vector like 2010:2012, we just take the min and max
+      start_yr <- min(as.numeric(years))
+      end_yr   <- max(as.numeric(years))
+    }
     
     # 4. BATCH REQUEST (The Speed Secret)
     message(paste("Fetching data for", nrow(site_aoi), "sites in one go..."))
@@ -47,7 +54,7 @@ getSNOTEL <- function(aoi,
     final_data <- all_dat_list %>%
       purrr::map(~ mutate(.x, across(everything(), as.character))) %>%
       bind_rows() %>%
-      left_join(as.data.frame(site_aoi), by = "Site") %>%
+      left_join(as.data.frame(site_aoi %>% select(Site)), by = "Site") %>%
       st_as_sf()
     
     # ... (rest of your mutate/save logic)
