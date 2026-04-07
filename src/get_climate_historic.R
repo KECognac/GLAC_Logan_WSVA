@@ -48,6 +48,8 @@
 #' @param return_grid Logical. If `TRUE` and `sf` is polygonal, writes an `sf`
 #'   layer named `aoi_gridmet_grid` to the **global environment** containing the
 #'   intersecting GridMET cell polygons in the raster CRS. Default `FALSE`.
+
+
 get_climate_historic <- function(sf,
                                  col_name,
                                  start = "1979-01-01",
@@ -56,72 +58,49 @@ get_climate_historic <- function(sf,
                                  exact = FALSE,
                                  return_grid = FALSE) {
   
-  sf <- sf %>%
-    dplyr::rename("join_index" = {{col_name}})
-  
+  # 1. Setup and Rename ID column
+  sf <- sf %>% dplyr::rename("join_index" = {{col_name}})
   all_climate_data <- vector("list", length = nrow(sf))
   
-  # Initiate empty grid list for returning one or multiple data grids
-  if (return_grid == TRUE){
+  if (return_grid) {
     grids <- vector("list", length = nrow(sf))
-    grids <- grids %>% setNames(sf$join_index)
+    names(grids) <- sf$join_index
   }
   
+  geom_type <- unique(as.character(sf::st_geometry_type(sf)))
   
-  if(any(unique(sf::st_geometry_type(sf)) %in% c("POLYGON", "MULTIPOLYGON"))){
+  # --- Logic for POLYGONS ---
+  if (any(geom_type %in% c("POLYGON", "MULTIPOLYGON"))) {
     
     for (i in 1:nrow(sf)) {
-      
       aoi <- sf[i,]
+      message(paste0('Downloading GridMET for ', aoi$join_index, "..."))
       
-      print(paste0('Downloading GridMET for ', aoi$join_index, "."))
+      # Download logic
+      aoi_fetch <- if(exact) sf::st_buffer(aoi, 4000) else aoi
+      clim <- climateR::getGridMET(AOI = aoi_fetch, varname = vars, 
+                                   startDate = start, endDate = end)
       
-      if(exact == TRUE){
-        # download climate data using a 4km buffer to ensure full cell capture at aoi edges
-        # getGridMET does NOT always grab all the grid cells that touch an AOI
-        clim <- climateR::getGridMET(AOI = sf::st_buffer(aoi, 4000),
-                                     varname = vars,
-                                     startDate = start,
-                                     endDate = end)
-      } else if(exact == FALSE) {
-        
-        # download climate data NOT using a 4km buffer to ensure full cell capture at aoi edges
-        # getGridMET does NOT always grab all the grid cells that touch an AOI
-        clim <- climateR::getGridMET(AOI = aoi,
-                                     varname = vars,
-                                     startDate = start,
-                                     endDate = end)
+      # Determine CRS and transform AOI
+      clim_crs <- terra::crs(clim[[1]])
+      aoi_trans <- if(sf::st_crs(aoi) != clim_crs) sf::st_transform(aoi, crs = clim_crs) else aoi
+      
+      # POPULATE GRID (Moved inside loop to ensure it captures every feature)
+      if (return_grid) {
+        grids[[i]] <- terra::as.polygons(clim[[1]], values = FALSE, dissolve = FALSE, na.rm = TRUE) %>%
+          sf::st_as_sf() %>%
+          .[aoi_trans, ]
       }
       
-      if(!is.data.frame(clim) | inherits(clim[[1]], "SpatRaster")){
-        
-        clim_crs <- terra::crs(clim[[1]])
-        
-        # transform AOI to match raster CRS if needed
-        if(sf::st_crs(aoi) != clim_crs) {
-          aoi_trans <- sf::st_transform(aoi, crs = clim_crs)
-        } else {
-          aoi_trans <- aoi
-        }
-        
-        if(return_grid == TRUE){
-          
-          grids[[i]] <- terra::as.polygons(clim[[1]], values = FALSE, dissolve = FALSE, na.rm = TRUE) %>%
-                     sf::st_as_sf() %>%
-                     .[aoi_trans,]
-          
-          
-        }
-        
-        if(exact == TRUE){
-          
+      # Processing Data
+      if (!is.data.frame(clim) || inherits(clim[[1]], "SpatRaster")) {
+        if (exact) {
+          # Weighted Extraction
           all_climate_data[[i]] <- clim %>%
-            purrr::map(~terra::extract(., terra::vect(aoi_trans), xy= TRUE, touches = TRUE, weights = TRUE)) %>%
+            purrr::map(~terra::extract(., terra::vect(aoi_trans), xy = TRUE, touches = TRUE, weights = TRUE)) %>%
             purrr::map_dfr(~ terra::as.data.frame(., xy = TRUE)) %>%
             data.table::data.table() %>%
-            tidyr::pivot_longer(-c(x, y, ID, weight),
-                                names_to = "var_temp",
-                                values_to = "val") %>%
+            tidyr::pivot_longer(-c(x, y, ID, weight), names_to = "var_temp", values_to = "val") %>%
             tidyr::separate_wider_delim(var_temp, "_", names = c("var", "date")) %>%
             tidyr::drop_na(val) %>%
             dplyr::group_by(x, y, date) %>%
@@ -133,17 +112,15 @@ get_climate_historic <- function(sf,
                           tmean_C = (tmax_C + tmin_C)/2,
                           join_index = aoi$join_index) %>%
             dplyr::rename(area_weight = weight) %>%
-            dplyr::select(-c(ID, tmmx, tmmn, pr))
+            dplyr::select(-any_of(c("ID", "tmmx", "tmmn", "pr")))
           
-        } else if(exact == FALSE){
-          
+        } else {
+          # Standard Crop/Mask
           all_climate_data[[i]] <- clim %>%
-            purrr::map(~terra::crop(., terra::vect(aoi_trans), mask = TRUE)) %>%          
+            purrr::map(~terra::crop(., terra::vect(aoi_trans), mask = TRUE)) %>%         
             purrr::map_dfr(~ terra::as.data.frame(., xy = TRUE)) %>%
             data.table::data.table() %>%
-            tidyr::pivot_longer(-c(x, y),
-                                names_to = "var_temp",
-                                values_to = "val") %>%
+            tidyr::pivot_longer(-c(x, y), names_to = "var_temp", values_to = "val") %>%
             tidyr::separate_wider_delim(var_temp, "_", names = c("var", "date")) %>%
             tidyr::drop_na(val) %>%
             dplyr::group_by(x, y, date) %>%
@@ -156,114 +133,65 @@ get_climate_historic <- function(sf,
                           join_index = aoi$join_index,
                           area_weight = NA) %>%
             dplyr::select(-any_of(c("tmmx", "tmmn", "pr")))
-         
         }
-        
-      } else {
-        
-        # when the returned object is already a clean data.frame (e.g., small aoi of just one grid)
-        
-        all_climate_data[[i]] <- clim %>%
-          data.table::data.table() %>%
-          # since polygon grabbed a single grid, gridMET does not provide the coordinates
-          # of the gridMET cell, so we fill in x and y with the coordinates
-          # of the sf object:
-          dplyr::mutate(x = sf::st_coordinates(sf::st_centroid(aoi))[[1]],
-                        y =  sf::st_coordinates(sf::st_centroid(aoi))[[2]]) %>%
-          # Then do all other cleaning steps done for polygon sf objects:
-          dplyr::mutate(date = as.Date(date),
-                        ppt_mm = if("pr" %in% names(.)) {pr} else {NA_real_},
-                        tmax_C = if("tmmx" %in% names(.)) {tmmx - 273.15} else {NA_real_},
-                        tmin_C = if("tmmn" %in% names(.)) {tmmn - 273.15} else {NA_real_},
-                        tmean_C = (tmax_C + tmin_C)/2,
-                        join_index = aoi$join_index,
-                        # for a single grid cell fract of total aoi area divided 
-                        # by 4km grid cell. Not really important tho since no 
-                        # weighting really needed for these.
-                        area_weight = ifelse(exact, NA, as.numeric(sf::st_area(aoi_trans)/4000000))) %>%
-          dplyr::select(-any_of(c("tmmx", "tmmn", "pr")))
-        
       }
     }
     
-    # combine all aoi outputs into one dataframe
-    all_climate_data <- all_climate_data %>%
-      dplyr::bind_rows()
-    
-    # rename the join_index column
-    colnames(all_climate_data)[colnames(all_climate_data) == "join_index"] <- {{col_name}}
-    
-    return(all_climate_data)
-    
-  } else if(unique(sf::st_geometry_type(sf)) == "POINT"){
+    # --- Logic for POINTS ---
+  } else if (any(geom_type == "POINT")) {
     
     for (i in 1:nrow(sf)) {
-      
       aoi <- sf[i,]
+      message(paste0('Downloading GridMET for ', aoi$join_index, "..."))
       
-      print(paste0('Downloading GridMET for ', aoi$join_index, "."))
+      clim <- climateR::getGridMET(AOI = aoi, varname = vars, 
+                                   startDate = start, endDate = end)
       
-      clim <- climateR::getGridMET(AOI = aoi,
-                                   varname = vars,
-                                   startDate = start,
-                                   endDate = end)
-      
-      if(return_grid == TRUE){
-        
-        point_grid <- climateR::getGridMET(AOI = sf::st_buffer(aoi, 4000),
-                                     varname = "tmmx",
-                                     startDate = "2000-01-01",
-                                     endDate = "2000-01-02")
-        
-        clim_crs <- terra::crs(point_grid[[1]])
-        
-        # transform AOI to match raster CRS if needed
-        if(sf::st_crs(aoi) != clim_crs) {
-          aoi_trans <- sf::st_transform(aoi, crs = clim_crs)
-        } else {
-          aoi_trans <- aoi
-        }
-        
-        grids[[i]] <- terra::as.polygons(point_grid[[1]], values = FALSE, dissolve = FALSE, na.rm = TRUE) %>%
-                   sf::st_as_sf() %>%
-                   .[aoi_trans,]
-        
+      if (return_grid) {
+        # Fetch small grid for point visualization
+        point_grid_raw <- climateR::getGridMET(AOI = sf::st_buffer(aoi, 4000), varname = "tmmx", 
+                                               startDate = start, endDate = start)
+        grids[[i]] <- terra::as.polygons(point_grid_raw[[1]], values = FALSE, dissolve = FALSE) %>%
+          sf::st_as_sf() %>%
+          .[sf::st_transform(aoi, terra::crs(point_grid_raw[[1]])), ]
       }
       
       all_climate_data[[i]] <- clim %>%
         data.table::data.table() %>%
-        # since point pulls from gridMET do not provide the coordinates
-        # of the gridMET cell, we fill in x and y with the coordinates
-        # of the sf object:
         dplyr::mutate(x = sf::st_coordinates(sf::st_centroid(aoi))[[1]],
-                      y =  sf::st_coordinates(sf::st_centroid(aoi))[[2]]) %>%
-        # Then do all other cleaning steps done for polygon sf objects:
-        dplyr::mutate(date = as.Date(date),
-                      ppt_mm = pr,
-                      tmax_C = tmmx - 273.15,
-                      tmin_C = tmmn - 273.15,
+                      y = sf::st_coordinates(sf::st_centroid(aoi))[[2]],
+                      date = as.Date(date),
+                      ppt_mm = if("pr" %in% names(.)) {pr} else {NA_real_},
+                      tmax_C = if("tmmx" %in% names(.)) {tmmx - 273.15} else {NA_real_},
+                      tmin_C = if("tmmn" %in% names(.)) {tmmn - 273.15} else {NA_real_},
                       tmean_C = (tmax_C + tmin_C)/2,
                       join_index = aoi$join_index,
-                      # For a point, this concept doesn't really apply
                       area_weight = NA) %>%
-        dplyr::select(-c(tmmx, tmmn, pr))
-      
+        dplyr::select(-any_of(c("tmmx", "tmmn", "pr")))
     }
     
-    all_climate_data <- all_climate_data %>%
-      dplyr::bind_rows()
-    
-    # Rename the join_index column
-    colnames(all_climate_data)[colnames(all_climate_data) == "join_index"] <- {{col_name}}
-    
-    if (return_grid == TRUE) {
-      assign("aoi_gridmet_grid", 
-           grids %>% bind_rows(.id = col_name), 
-           envir = .GlobalEnv)
-    }
-    
-    return(all_climate_data)
-    
-  } else {stop("Your sf feature is neither a polygon nor point feature, or it needs to be made valid.")}
+  } else {
+    stop("Input geometry must be Polygon or Point.")
+  }
   
+  # --- FINAL COMBINATION & ASSIGNMENT (Shared by all types) ---
+  
+  # Combine into one dataframe
+  final_df <- dplyr::bind_rows(all_climate_data)
+  
+  # Restore the original ID column name
+  # We use the quosure name to restore the user's specific column name
+  id_col_str <- rlang::as_name(rlang::enquo(col_name))
+  colnames(final_df)[colnames(final_df) == "join_index"] <- id_col_str
+  
+  # Global Grid Assignment
+  if (return_grid) {
+    message("Writing 'aoi_gridmet_grid' to Global Environment.")
+    # Bind the grids and add the ID column back
+    grid_out <- dplyr::bind_rows(grids, .id = "temp_id")
+    colnames(grid_out)[colnames(grid_out) == "temp_id"] <- id_col_str
+    assign("aoi_gridmet_grid", grid_out, envir = .GlobalEnv)
+  }
+  
+  return(final_df)
 }
