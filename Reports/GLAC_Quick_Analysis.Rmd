@@ -1766,26 +1766,25 @@ ggsave("data/park/GLAC/Figs/logan_sd.jpg", dpi = 600, width = 7, height = 3.5)
 ```{r use_vs_visitor_and_per_visitor_use_plot}
 
 ggarrange(
-  
-  # Use vs visitor plot
-  ggplot(logan_sdv %>% 
-          dplyr::filter(month(ym) %in% c(6,7,8,9)) %>%
-          dplyr::mutate(month_name = as.factor(month(ym, label = TRUE, abbr = FALSE))), 
-            aes(x = LoganVisitors, y = use_gal/n_days_data)) +
-      geom_point(aes(shape = month_name)) +
-      geom_smooth(method = "lm", color = pal$pink, fill = pal$pink, alpha = 0.2) +
-      theme_bw() +
-      scale_y_continuous(labels = k_formatter) + 
-      scale_x_continuous(labels = k_formatter) + 
-      labs(x = "Total Monthly Visitors",
-           y = "Average Daily\n Water Demand (gallons)",
-           shape = NULL)+
-          # caption = "Average daily use accounts for differing number of monthly demand records.") +
-      theme(
-        legend.position = c(0.98, 0.03), 
-        legend.justification = c("right", "bottom"),
-        legend.background = element_rect(fill = alpha("white", 0.7), color = "grey80"),
-        panel.grid.minor = element_blank()
+ ggplot(logan_sdv %>% 
+         dplyr::filter(month(ym) %in% c(6,7,8,9)) %>%
+         dplyr::mutate(month_name = as.factor(month(ym, label = TRUE, abbr = FALSE))), 
+       aes(x = LoganVisitors, y = use_gal/n_days_data)) +
+  geom_point(aes(shape = month_name)) +
+  geom_smooth(method = "lm", color = pal$pink, fill = pal$pink, alpha = 0.2) +
+  stat_regline_equation(label.y = 8000, aes(label = ..eq.label..)) + # Adjust label.y to fit your data
+  stat_regline_equation(label.y = 7000, aes(label = ..rr.label..)) + # Adds R2
+  theme_bw() +
+  scale_y_continuous(labels = k_formatter) + 
+  scale_x_continuous(labels = k_formatter) + 
+  labs(x = "Total Monthly Visitors",
+       y = "Average Daily\n Water Demand (gallons)",
+       shape = NULL) +
+  theme(
+    legend.position = c(0.98, 0.03), 
+    legend.justification = c("right", "bottom"),
+    legend.background = element_rect(fill = alpha("white", 0.7), color = "grey80"),
+    panel.grid.minor = element_blank()
   ),
   
   # Use per visitor plot
@@ -1816,7 +1815,10 @@ ggarrange(
   
   # Monthly Use and supply trends
   ggplot(logan_sdv_monthly_proportions) +
-    geom_ribbon(aes(x = month_date, ymin = use_gal_min, ymax = use_gal_max, fill = "Demand"), alpha = 0.3) +
+    geom_ribbon(aes(x = month_date, 
+                    ymin = use_gal_min, 
+                    ymax = use_gal_max, 
+                    fill = "Demand"), alpha = 0.3) +
     geom_line(aes(x = month_date, y = use_gal_mean), color = "black", lwd = 1.5) +
     geom_line(aes(x = month_date, y = use_gal_mean, color = "Demand"), lwd = 1) +
     geom_ribbon(aes(x = month_date, ymin = supply_gal_min, ymax = supply_gal_max, fill = "Supply"), alpha = 0.3) +
@@ -1895,6 +1897,8 @@ sp <- ggplot(season_summary, aes(y = factor(year))) +
         text = element_text(size = 10),
         axis.text = element_text(size = 10),
         plot.margin = margin(t = 10, r = 50, b = 10, l = 10))
+
+sp
 
 ggsave("data/park/GLAC/Figs/visitor_season.jpg", plot = sp, dpi = 600, width = 3, height = 3)
 
@@ -1992,7 +1996,6 @@ ggplot(wbm %>% dplyr::filter(year(date) > 2015,
 
 ```{r use_per_visitor}
 
-
 obs_use_per_visitor <- logan_sdv %>% 
          dplyr::filter(month(ym) %in% c(7,8)) %>%
          dplyr::mutate(use_pv = use_gal / LoganVisitors) %>%
@@ -2009,9 +2012,10 @@ For this first part, we develop a logistic model simply to account for visitor g
 ```{r logistic}
 # 1. Define an estimated Carrying Capacity (K) for CEBR
 # We don't know what this value is, so we'll test a low, medium, and high value
-K_limit_high <- 4500000
-K_limit_low <- K_limit_high * 0.7
-K_limit_mid <- K_limit_high * 0.8
+K_limit_mid <- 3500000
+K_limit_high <- K_limit_mid * 1.2
+K_limit_low <- K_limit_mid * 0.8
+
 
 
 logistic_mod <- function(K_limit, r, t0, year) {
@@ -2114,11 +2118,15 @@ annual_vis_mod_plot <- ggarrange(
 
   # Panel C: Observed vs Modeled (1:1 Plot)
   ggplot(vis_mod_dat, aes(x = LoganVisitors, y = pred_vis)) +
-    geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dotted", size = 1) +
+    geom_abline(intercept = 0, slope = 1, color = "black", 
+                linetype = "dotted", 
+                size = 1) +
     geom_point(alpha = 0.7, size = 2) +
     theme_bw() +
     coord_equal() + # Important for 1:1 plots
-    labs(x = "Observed Annual Visitors", y = "Modeled Annual Visitors", title = "1:1 Accuracy"),
+    labs(x = "Observed Annual Visitors", 
+         y = "Modeled Annual Visitors", 
+         title = "1:1 Accuracy"),
 
   ncol = 1, # Stacked vertically to better see annual trends
   align = "v"
@@ -2126,7 +2134,9 @@ annual_vis_mod_plot <- ggarrange(
 
 annual_vis_mod_plot
 
-ggsave(plot = annual_vis_mod_plot, filename = "data/park/GLAC/Figs/Annual_vis_mod.tiff", dpi = 600, width = 7, height = 5)
+ggsave(plot = annual_vis_mod_plot, 
+       filename = "data/park/GLAC/Figs/Annual_vis_mod.tiff", 
+       dpi = 600, width = 7, height = 5)
 ```
 
 Now, use model to project visitation
@@ -2266,29 +2276,9 @@ We estimate water use based on visitation with low, mid, and high use per visito
 
 # Therefore, we'll estimate based on visitation
 
-#    0.566       0.390      0.187
-
-high_use_per_visitor <- .5 * gal_to_cf # --> equal to 5 gallons [high range use]
-low_use_per_visitor <- 0.3 * gal_to_cf # Past use rate (hughes, 1996) [low use]
-mid_use_per_visitor <- 0.4 * gal_to_cf # # [mid range use]
-
-# Calculate monthly use proportions (NOTE THESE ARE IN CF)
-monthly_use_proportions <- monthly_visitor_proportions %>%
-  dplyr::select(month, month_date, TV_mean, fut_mean_vis) %>%
-  dplyr::mutate(mid_use_hist = TV_mean * mid_use_per_visitor,
-                mid_use_fut = fut_mean_vis * mid_use_per_visitor,
-                low_use_hist = TV_mean * low_use_per_visitor,
-                low_use_fut = fut_mean_vis * low_use_per_visitor,
-                high_use_hist = TV_mean * high_use_per_visitor,
-                high_use_fut = fut_mean_vis * high_use_per_visitor,
-                use_fraction = mid_use_hist / sum(mid_use_hist)) %>%
-  # Assign 0 if visitor center closed
-  dplyr::mutate(across(
-    c(low_use_hist, mid_use_hist, high_use_hist, 
-      low_use_fut, mid_use_fut, high_use_fut),
-    ~ ifelse(month %in% c(10, 11, 12, 1, 2, 3, 4, 5), 0, .))) %>%
-  dplyr::select(month, month_date, low_use_hist, mid_use_hist, 
-                high_use_hist, low_use_fut, mid_use_fut, high_use_fut)
+high_use_per_visitor <- .54# * gal_to_cf # --> equal to 5 gallons [high range use]
+low_use_per_visitor <- 0.2 #* gal_to_cf # Past use rate (hughes, 1996) [low use]
+mid_use_per_visitor <- 0.36# * gal_to_cf # # [mid range use]
 
 
 # Multiply annual by monthly use proportions
@@ -2296,7 +2286,7 @@ monthly_use <- monthly_visitors %>%
   dplyr::filter(year(ym) > 1997) %>%
   arrange(ym) %>%
   dplyr::mutate(month = month(ym)) %>%
-  # 1. Calculate the use values
+  # 1. Calculate the use values (in gallons)
   dplyr::mutate(monthly_use_low = monthly_vis_low * low_use_per_visitor,
                 monthly_use_mid = monthly_vis * mid_use_per_visitor,
                 monthly_use_high = monthly_vis_high * high_use_per_visitor) %>%
@@ -2306,13 +2296,27 @@ monthly_use <- monthly_visitors %>%
   dplyr::mutate(across(
     c(monthly_use_low, monthly_use_high, monthly_use_mid),
     ~ case_when(month %in% c(10, 11, 12, 1, 2, 3, 4, 5) ~ 0,
-                month %in% c(6,9) ~ .*0.25,
+                month %in% c(9) ~ .*0.25,
+                month %in% c(6) ~ .*.75,
                 month %in% c(7,8) ~.))) %>%
   # 4. Join with WBM data
   left_join(logan_sd_monthly, by = "ym")
 
 
-
+# Create table of monthly mean, max, min, sd, and cv of historical visitors
+monthly_use_proportions <- monthly_use %>%
+        dplyr::mutate(year = year(ym)) %>%
+        dplyr::filter(year != 2020) %>%
+        dplyr::group_by(month) %>%
+        dplyr::summarize(mid_use_obs = mean(use_gal, na.rm = TRUE),
+                         mid_use_hist = mean(monthly_use_mid[year < 2025], na.rm = TRUE),
+                         mid_use_fut = mean(monthly_use_mid[year > 2034 & year < 2065]),
+                         low_use_hist = mean(monthly_use_low[year < 2025], na.rm = TRUE),
+                         low_use_fut = mean(monthly_use_low[year > 2034 & year < 2065]),
+                         high_use_hist = mean(monthly_use_high[year < 2025], na.rm = TRUE),
+                         high_use_fut = mean(monthly_use_high[year > 2034 & year < 2065])) %>%
+           dplyr::mutate(month_date = as_date(paste0("2000-",month,"-01")),
+                         fraction = mid_use_hist/sum(mid_use_hist))
 
 # Compare recorded and modeled monthly use:
 ggplot(monthly_use %>% dplyr::filter(!is.na(use_gal)), aes(x = ym)) +
@@ -2323,12 +2327,12 @@ ggplot(monthly_use %>% dplyr::filter(!is.na(use_gal)), aes(x = ym)) +
              size = 2.5) +
   
   
-  geom_ribbon(aes(ymin = monthly_use_low * cf_to_gal / 1000, 
-                  ymax = monthly_use_high * cf_to_gal / 1000, fill = "Modeled"), alpha = 0.2) +
+  geom_ribbon(aes(ymin = monthly_use_low / 1000, 
+                  ymax = monthly_use_high  / 1000, fill = "Modeled"), alpha = 0.2) +
   
-  geom_line(aes(y = (monthly_use_mid * cf_to_gal) / 1000, color = "Modeled"), 
+  geom_line(aes(y = (monthly_use_mid) / 1000, color = "Modeled"), 
             lwd = 1, linetype = "dashed") + 
-  geom_point(aes(y = (monthly_use_mid * cf_to_gal) / 1000, color = "Modeled"), 
+  geom_point(aes(y = (monthly_use_mid) / 1000, color = "Modeled"), 
              size = 2, alpha = 0.7) +
   
   # Professional Styling
@@ -2358,7 +2362,7 @@ annual_use <- monthly_use %>%
                    high_use = sum(monthly_use_high),
                    actual_use = sum(use_gal, na.rm = TRUE)) %>%
   dplyr::mutate(c_group = ifelse(year <= 2025, "Historical", "Projected")) %>%
-  dplyr::mutate(actual_use = ifelse(actual_use == 0, NA, actual_use/cf_to_gal))
+  dplyr::mutate(actual_use = ifelse(actual_use == 0, NA, actual_use))
 
 # Plot
 ggplot(annual_use, aes(x = year)) +
@@ -2378,11 +2382,14 @@ ggplot(annual_use, aes(x = year)) +
 
 # --- 1. Calculate Monthly Supply Proportions ---
 monthly_supply_proportions <- wbm %>%
-  select(CF, date, runoff_cf) %>%
+  select(CF, date, inflow_gal, inflow_gal_low, inflow_gal_high) %>%
   mutate(ym = make_ym(date)) %>%
   # Aggregate to monthly total per Climate Future (CF) and Model (GCM)
   group_by(ym, CF) %>%
-  summarize(runoff_cf = sum(runoff_cf, na.rm = TRUE), .groups = "drop") %>%
+  summarize(inflow_gal = sum(inflow_gal, na.rm = TRUE),
+            inflow_gal_low = sum(inflow_gal_low, na.rm = TRUE),
+            inflow_gal_high = sum(inflow_gal_high, na.rm = TRUE),
+            .groups = "drop") %>%
   mutate(
     month = month(ym),
     year  = year(ym),
@@ -2396,9 +2403,9 @@ monthly_supply_proportions <- wbm %>%
   # Calculate summary stats per month and CF
   group_by(month, CF) %>%
   summarize(
-    monthly_supply_cf     = mean(runoff_cf, na.rm = TRUE),
-    monthly_supply_cf_max = max(runoff_cf, na.rm = TRUE),
-    monthly_supply_cf_min = min(runoff_cf, na.rm = TRUE),
+    monthly_supply_gal     = mean(inflow_gal, na.rm = TRUE),
+    monthly_supply_gal_max = max(inflow_gal_high, na.rm = TRUE),
+    monthly_supply_gal_min = min(inflow_gal_low, na.rm = TRUE),
     .groups = "drop"
   ) %>%
   mutate(
@@ -2408,8 +2415,8 @@ monthly_supply_proportions <- wbm %>%
   # Calculate fractional distribution across the year
   group_by(CF) %>%
   mutate(
-    total_cf         = sum(monthly_supply_cf),
-    monthly_fraction = monthly_supply_cf / total_cf
+    total_gal         = sum(monthly_supply_gal),
+    monthly_fraction = monthly_supply_gal / total_gal
   ) %>% 
   ungroup()
 
@@ -2700,8 +2707,8 @@ spei_metrics %>%
   arrange(factor(Category, levels = c("Overall", "Moderate", "Severe", "Extreme"))) %>%
   dplyr::select(Category, Statistic, Historical, `Hot Dry`, `Warm Wet`) %>%
   dplyr::mutate(Historical = as.numeric(Historical) %>% signif(., digits = 3),
-                `Hot Dry` = as.numeric(`Drier`) %>% signif(., digits = 3),
-                `Warm Wet` = as.numeric(`Wetter`) %>% signif(., digits = 3)) %>%
+                `Hot Dry` = as.numeric(`Hot Dry`) %>% signif(., digits = 3),
+                `Warm Wet` = as.numeric(`Warm Wet`) %>% signif(., digits = 3)) %>%
   #mutate_if(is.numeric, format, digits = 4, nsmall = 0) %>%
   dplyr::mutate(across(where(is.numeric), .fns = ~ signif(.x, 3))) #%>%
  # kable()
@@ -3321,9 +3328,9 @@ ggsave(vis_fig, filename = "data/park/GLAC/Figs/Logan_vis.tif",
 use_2025 <- monthly_use %>%
   dplyr::filter(year(ym) == 2025) %>%
   dplyr::mutate(month_date = as.Date(paste0("2000-", month(ym),"-01"))) %>%
-  dplyr::select(month_date, monthly_use_mid) %>%
-  dplyr::mutate(monthly_use_mid_gal = monthly_use_mid * cf_to_gal)
-  
+  dplyr::select(month_date, use_gal, monthly_use_mid) %>%
+  dplyr::mutate(monthly_use_mid_gal = use_gal,
+                monthly_use_mid_proj = monthly_use_mid)
 
 
 use_fig <- list(2)
@@ -3334,7 +3341,7 @@ cols <- c("low_use_hist", "high_use_hist", "mid_use_hist",
 
 p_dat <- monthly_use_proportions %>%
   # Convert to gallons
-  dplyr::mutate(across(all_of(cols), ~ .x * cf_to_gal)) 
+  dplyr::mutate(across(all_of(cols), ~ .x * 1)) 
 
 use_fig[[1]] <- ggplot(p_dat) +
    geom_ribbon(aes(x = month_date, 
@@ -3359,17 +3366,17 @@ use_fig[[1]] <- ggplot(p_dat) +
               lwd = 1, lineend = "round") +
   geom_line(data = use_2025, 
             aes(x = month_date, y = monthly_use_mid_gal, 
-                color = "2025", fill = "2025"), lwd = 1, linetype = "dashed") +
-  geom_hline(yintercept = 8000*31, color = "black", lwd = 1) +
-  annotate("text", x = -Inf,y = 8000 * 31, label = "8,000 gal/day", 
+                color = "Recorded 2025", fill = "2025"), lwd = 1, linetype = "dashed") +
+  geom_hline(yintercept = 7000*31, color = "black", lwd = 1) +
+  annotate("text", x = -Inf,y = 7000 * 31, label = "7,000 gal/day", 
            vjust = -0.5, hjust = -0.1, fontface = "italic", size = 4) +
     theme_bw() +
    scale_color_manual("", values = c("Projected" = pal$pink, 
                                      "Historical" = pal$darkblue,
-                                     "2025" = "black")) +
+                                     "Recorded 2025" = "black")) +
   scale_fill_manual("", values = c("Projected" = pal$pink, 
                                    "Historical" = pal$darkblue,
-                                   "2025" = "black")) +
+                                   "Recorded 2025" = "black")) +
   scale_y_continuous(labels = scales::label_number(scale = 1e-3, suffix = "K")) +
     labs(x = "", y = "Monthly Use (gal)") +
   scale_x_date(labels = date_format("%b")) +
@@ -3381,7 +3388,7 @@ cols <- c("low_use", "high_use", "mid_use")
 
 p_dat <- annual_use %>%
   # Convert to gallons
-  dplyr::mutate(across(all_of(cols), ~ .x * cf_to_gal)) %>%
+  #dplyr::mutate(across(all_of(cols), ~ .x * cf_to_gal)) %>%
   dplyr::filter(year > 1997)
 
 use_fig[[2]] <- ggplot(p_dat) +
@@ -3405,9 +3412,9 @@ use_fig[[2]] <- ggplot(p_dat) +
    annotate("label", 
             x = -Inf,
             y = Inf, 
-            label = paste0("Low = ", round(low_use_per_visitor*cf_to_gal,1), 
-                           " gal/visitor\nMid = ", round(mid_use_per_visitor * cf_to_gal, 2), 
-                           " gal/visitor\nHigh = ", round(high_use_per_visitor * cf_to_gal,2),
+            label = paste0("Low = ", round(low_use_per_visitor,1), 
+                           " gal/visitor\nMid = ", round(mid_use_per_visitor, 2), 
+                           " gal/visitor\nHigh = ", round(high_use_per_visitor,2),
                            " gal/visitor"), 
             hjust = -.07, 
             vjust = 1.1, 
@@ -3422,6 +3429,7 @@ use_fig[[2]] <- ggplot(p_dat) +
     #fontface = "bold"
   )
 
+ggplotly(use_fig[[2]])
 
 # Compile figures
 
@@ -3677,7 +3685,7 @@ A plot of the seasonality of historical and projected rain, snowmelt, actual ET,
 ```{r figure_12}
 # Create Seasonal Dataframe
 sum_cols <- c("aet_in_wbm","melt_in_wbm","pet_in_wbm","rain_in_wbm","runoff_in_wbm","snow_in_wbm", "precip_in_wbm", "runoff_gal", "runoff_cf")
-mean_cols <- c("excess_water_in_wbm","tmean_C") 
+mean_cols <- c("tmean_C") 
 
 seasonal_wbm <- wbm %>%
   dplyr::mutate(season = case_when(month(date) %in% c(12,1,2) ~ "Winter",
@@ -3772,7 +3780,7 @@ ggsave(seasonal_fig, filename = "data/park/GLAC/Figs/Seasonal.tif",
        dpi = 600, width = 7, height = 5)
 ```
 
-##### Figure 13
+##### Snowmelt Runoff
 
 A plot of the fraction of snowmelt-derived runoff plotted through time across climate futures:
 
@@ -3845,9 +3853,7 @@ sm_fraction_fig <- ggplot(pdat) +
   geom_line(aes(x = year, y = melt_frac, color = CF), lwd = 1.5, lineend = "round") +
   theme_bw() +
   labs(x = "", y = "Snowmelt Fraction of Runoff") +
-  scale_color_manual("", values = c("Historical" = "#a9a9a9", 
-                                     "Hot Dry" = "#c5312a",
-                                     "Warm Wet" = "#85b6dc")) +
+  scale_color_manual("", values = plot_colors) +
   theme(legend.position = "bottom", legend.margin = margin(t = -15, b = 0, l = 0, r = 0))
 
 # Snowmelt timing figure
@@ -3858,9 +3864,7 @@ sm_timing_fig <- ggplot(snowmelt_stats_d, aes(x = doy_date, color = CF)) +
   geom_vline(data = peak_melt, aes(color = CF, xintercept = doy_date, linetype = "Peak Melt"), lwd = 1.5, alpha = 0.5) +
   theme_bw() +
   scale_color_manual("DOY Mean & \n5-Day \nRolling Mean", 
-                     values = c("Historical" = "#a9a9a9", 
-                                     "Hot Dry" = "#c5312a",
-                                     "Warm Wet" = "#85b6dc")) +
+                     values = plot_colors) +
   scale_linetype_manual("", values = c(1)) +
   scale_x_date(date_breaks = "1 month", date_labels = "%b %d") +
   labs(y = "Mean Daily Snowmelt (in)", x = "") +
@@ -3876,9 +3880,7 @@ dis_timing_fig <- ggplot(snowmelt_stats_d, aes(x = doy_date, color = CF)) +
   theme_bw() +
   scale_x_date(date_breaks = "1 month", date_labels = "%b %d") +
   scale_color_manual("DOY Mean & \n5-Day \nRolling Mean", 
-                     values = c("Historical" = "#a9a9a9", 
-                                     "Hot Dry" = "#c5312a",
-                                     "Warm Wet" = "#85b6dc")) +
+                     values = plot_colors) +
   scale_linetype_manual("", values = c(1)) +
   labs(y = "Mean Daily Runoff (gallons)", x = "") +
   theme(legend.position = "bottom", legend.margin = margin(t = -15, b = 0, l = 0, r = 0))
@@ -3952,12 +3954,13 @@ pdat <- monthly_supply_proportions %>%
   #Plot historical demand:supply
   ggplot(pdat) +
   # Supply
-  geom_ribbon(aes(x = month_date, ymin = monthly_supply_cf_min, 
-                  ymax = monthly_supply_cf_max, fill = CF), 
+  geom_ribbon(aes(x = month_date, ymin = monthly_supply_cf_min * cf_to_gal, 
+                  ymax = monthly_supply_cf_max * cf_to_gal, 
+                  fill = CF), 
                alpha = 0.2) +
-  geom_line(aes(x = month_date, y = monthly_supply_cf, group = CF), 
+  geom_line(aes(x = month_date, y = monthly_supply_cf * cf_to_gal, group = CF), 
              color = "black", lineend = "round", lwd = 2) +
-  geom_line(aes(x = month_date, y = monthly_supply_cf, color = CF,  linetype = "Supply"), 
+  geom_line(aes(x = month_date, y = monthly_supply_cf * cf_to_gal, color = CF,  linetype = "Supply"), 
               lineend = "round", lwd = 1) +
   # Demand
   geom_ribbon_pattern(aes(x = month_date, ymin = low_use, ymax = high_use, pattern_fill = CF), 
@@ -4053,11 +4056,11 @@ ggsave(ds_fig, filename = "data/park/GLAC/Figs/ds.tif",
 Track tank storage through time during dry, wet, and average years.
 ```{r sup_dem_tank_storage}
 # Define Tank Capacity
-tank_cap_gal <- 10000
+tank_cap_gal <- 100000
 
 pdat <- monthly_use %>%
   left_join(wbm_monthly %>%
-              dplyr::select(ym, CF, runoff_cf),
+              dplyr::select(ym, CF, inflow_gal, inflow_gal_low, inflow_gal_high),
             by = "ym") %>%
   dplyr::mutate(year = year(ym), 
                 month = month(ym)) %>%
@@ -4065,9 +4068,9 @@ pdat <- monthly_use %>%
   dplyr::group_by(CF, year, GCM) %>%
   # 1. Convert all units to Gallons
   dplyr::mutate(
-    monthly_sup_gal      = runoff_cf * cf_to_gal,
-    #monthly_sup_gal_low  = runoff_cf_low * cf_to_gal,
-    #monthly_sup_gal_high = runoff_cf_high * cf_to_gal,
+    monthly_sup_gal      = inflow_gal_low,
+    #monthly_sup_gal_low  = inflow_gal_low,
+    #monthly_sup_gal_high = inflow_gal_high,
     monthly_use_gal      = monthly_use_mid * cf_to_gal,
     monthly_use_gal_low  = monthly_use_low * cf_to_gal,
     monthly_use_gal_high = monthly_use_high * cf_to_gal
@@ -4143,7 +4146,7 @@ track_storage_fig <- ggplot(pdat, aes(x = ym, fill = CF)) +
 track_storage_fig
 
 
-ggsave(track_storage_fig, filename = "data/park/CEBR/Figs/track_storage.tif",
+ggsave(track_storage_fig, filename = "data/park/CEBR/Figs/track_storage_10kgal.tif",
        dpi = 600, width = 7, height = 2.5)
 
 ```
