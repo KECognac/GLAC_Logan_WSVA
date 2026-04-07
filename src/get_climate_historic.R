@@ -69,7 +69,7 @@ get_climate_historic <- function(sf,
   
   geom_type <- unique(as.character(sf::st_geometry_type(sf)))
   
-  # --- Logic for POLYGONS ---
+  # POLYGON WORKFLOW
   if (any(geom_type %in% c("POLYGON", "MULTIPOLYGON"))) {
     
     for (i in 1:nrow(sf)) {
@@ -85,7 +85,7 @@ get_climate_historic <- function(sf,
       clim_crs <- terra::crs(clim[[1]])
       aoi_trans <- if(sf::st_crs(aoi) != clim_crs) sf::st_transform(aoi, crs = clim_crs) else aoi
       
-      # POPULATE GRID (Moved inside loop to ensure it captures every feature)
+      # POPULATE GRID 
       if (return_grid) {
         grids[[i]] <- terra::as.polygons(clim[[1]], values = FALSE, dissolve = FALSE, na.rm = TRUE) %>%
           sf::st_as_sf() %>%
@@ -137,7 +137,7 @@ get_climate_historic <- function(sf,
       }
     }
     
-    # --- Logic for POINTS ---
+    # POINTS WORKFLOW
   } else if (any(geom_type == "POINT")) {
     
     for (i in 1:nrow(sf)) {
@@ -174,7 +174,7 @@ get_climate_historic <- function(sf,
     stop("Input geometry must be Polygon or Point.")
   }
   
-  # --- FINAL COMBINATION & ASSIGNMENT (Shared by all types) ---
+  # FINAL COMBINATION & ASSIGNMENT (POINTS & POLYGONS)
   
   # Combine into one dataframe
   final_df <- dplyr::bind_rows(all_climate_data)
