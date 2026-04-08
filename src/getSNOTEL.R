@@ -16,7 +16,7 @@ getSNOTEL <- function(aoi,
                       save = FALSE, 
                       path = NULL) {
     
-    # 1. Buffer and Transform AOI once
+    # 1. Buffer and Transform AOI 
     aoi_buf <- st_buffer(aoi, dist = dist)
     aoi_wgs84 <- st_transform(aoi_buf, 4326)
     
@@ -24,12 +24,12 @@ getSNOTEL <- function(aoi,
     data('SCAN_SNOTEL_metadata', package = 'soilDB')
     sites <- st_as_sf(SCAN_SNOTEL_metadata, coords = c("Longitude", "Latitude"), crs = 4326)
     
-    site_aoi <- sites[aoi_wgs84, ] # Fast spatial subset
+    site_aoi <- sites[aoi_wgs84, ] # Spatial Subset
     
     if (nrow(site_aoi) == 0) return(message("No sites found."))
     
     # 3. Determine Year Range
-    # We use years[1] to check the first element of the input
+    # Use years[1] to check the first element of the input
     if (years[1] == "all") {
       start_yr <- min(lubridate::year(site_aoi$beginDate), na.rm = TRUE)
       end_yr   <- celebrate::year(Sys.Date())
@@ -39,7 +39,7 @@ getSNOTEL <- function(aoi,
       end_yr   <- max(as.numeric(years))
     }
     
-    # 4. BATCH REQUEST (The Speed Secret)
+    # 4. BATCH REQUEST 
     message(paste("Fetching data for", nrow(site_aoi), "sites in one go..."))
     
     # fetchSCAN returns a list of dataframes
@@ -49,15 +49,13 @@ getSNOTEL <- function(aoi,
       timeseries = timeseries
     )
     
+    metadata <- all_dat_list[names(all_dat_list) == "metadata"]$metadata
+    
     # 5. Clean up efficiently
-    # bind_rows handles the list of dataframes much faster than a manual loop
-    final_data <- all_dat_list %>%
+    final_data <- all_dat_list[names(all_dat_list) != "metadata"] %>%
       purrr::map(~ mutate(.x, across(everything(), as.character))) %>%
       bind_rows() %>%
-      left_join(as.data.frame(site_aoi %>% select(Site)), by = "Site") %>%
-      st_as_sf()
-    
-    # ... (rest of your mutate/save logic)
+      left_join(metadata, by = "Site")
     
     return(final_data)
 }
