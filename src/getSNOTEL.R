@@ -32,7 +32,7 @@ getSNOTEL <- function(aoi,
     # Use years[1] to check the first element of the input
     if (years[1] == "all") {
       start_yr <- min(lubridate::year(site_aoi$beginDate), na.rm = TRUE)
-      end_yr   <- celebrate::year(Sys.Date())
+      end_yr   <- lubridate::year(Sys.Date())
     } else {
       # If it's a vector like 2010:2012, we just take the min and max
       start_yr <- min(as.numeric(years))
