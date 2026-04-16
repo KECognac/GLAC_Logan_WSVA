@@ -1088,7 +1088,19 @@ We select a subset of GCMs that bound the uncertainty range at Glacier. We evalu
 wbm_all <- recharge_wbm %>%
   bind_rows(recharge_fut_wbm %>% dplyr::filter(year(date) > 2025)) %>%
   as.data.table() %>%
-  left_join(all_cfs, by = "GCM")
+  dplyr::mutate(
+    tmean_F    = (9 / 5 * tmean_C) + 32,
+    runoff_cf  = runoff_scale * (runoff_in_wbm / 12) * recharge_area_ft2,
+    runoff_gal = runoff_cf * cf_to_gal
+  ) %>%
+ dplyr::group_by(GCM, x, y) %>%
+  # Apply routing to summarize "inflow" change across all models
+  dplyr::mutate(
+    inflow_gal      = apply_routing(data.table(date, runoff_gal),      "runoff_gal"),
+    inflow_cf       = inflow_gal      * gal_to_cf,
+    seasonal_inflow_gal = if_else(month(date) %in% 6:9, inflow_gal, 0)
+  ) %>%
+  left_join(all_cfs, by = "GCM") 
 
 rm("recharge_fut_wbm", "recharge_wbm")
 gc()
@@ -1105,13 +1117,15 @@ all_clim_stats <- wbm_all %>%
     )
   ) %>%
   dplyr::filter(stat_period != "Other") %>%
-  dplyr::select(GCM, stat_period, Skill, precip_in_wbm, tmean_C, runoff_in_wbm, pet_in_wbm) %>%
+  dplyr::select(GCM, stat_period, Skill, precip_in_wbm, tmean_C, runoff_in_wbm, pet_in_wbm, inflow_gal, seasonal_inflow_gal) %>%
   dplyr::group_by(GCM, stat_period, Skill) %>%
   dplyr::summarize(
     mean_precip_in         = 365.25 * mean(precip_in_wbm),
     mean_tmean_C           = mean(tmean_C),
     mean_runoff_in         = 365.25 * mean(runoff_in_wbm),
     median_runoff_in       = quantile(runoff_in_wbm, 0.75),
+    mean_inflow_gal        = 365.25 * mean(inflow_gal),
+    mean_seasonal_inflow_gal = 122 * mean(seasonal_inflow_gal), # June, July, Aug, Sept only so 122 days
     sd_runoff_in           = sd(runoff_in_wbm),
     cv_runoff_in           = sd(runoff_in_wbm) / mean(runoff_in_wbm),
     iqr_runoff_in          = as.numeric(quantile(runoff_in_wbm, 0.75)) -
@@ -1133,6 +1147,8 @@ future_differentials <- future %>%
     delta_precip_in           = mean_precip_in - baseline$mean_precip_in,
     delta_tmean_C             = mean_tmean_C   - baseline$mean_tmean_C,
     delta_runoff_in           = mean_runoff_in - baseline$mean_runoff_in,
+    delta_inflow_gal          = mean_inflow_gal - baseline$mean_inflow_gal,
+    delta_seasonal_inflow_gal = mean_seasonal_inflow_gal - baseline$mean_seasonal_inflow_gal,
     delta_runoff_per          = 100 * (mean_runoff_in - baseline$mean_runoff_in) / baseline$mean_runoff_in,
     delta_precip_per          = 100 * (mean_precip_in - baseline$mean_precip_in) / baseline$mean_precip_in,
     delta_runoff_in_sd        = sd_runoff_in  - baseline$sd_runoff_in,
@@ -1220,6 +1236,7 @@ wbm <- wbm %>%
   dplyr::mutate(
     runoff_gal_low  = 0.5 * runoff_gal,
     runoff_gal_high = 1.5 * runoff_gal,
+    # Recalculate inflow with high and low factors.
     inflow_gal      = apply_routing(data.table(date, runoff_gal),      "runoff_gal"),
     inflow_gal_low  = apply_routing(data.table(date, runoff_gal_low),  "runoff_gal_low"),
     inflow_gal_high = apply_routing(data.table(date, runoff_gal_high), "runoff_gal_high"),
@@ -2457,12 +2474,12 @@ kable(SD)
 ##### Differentials Figure
 
 ```{r figure_differentials}
-diff_plot <- ggplot(
+diff_plot_runoff <- ggplot(
   future_differentials %>%
     dplyr::mutate(GCM_Meta = ifelse(GCM_Meta %in% c("Warm Dry", "Hot Wet"), "Other", GCM_Meta)),
-  aes(x = reorder(GCM, delta_runoff_in),
-      y = delta_runoff_in,
-      fill = GCM_Meta)
+ aes(x = reorder(GCM, delta_runoff_in),
+     y = delta_runoff_in,
+     fill = GCM_Meta)
 ) +
   geom_bar(stat = "identity") +
   theme_bw() +
@@ -2477,84 +2494,124 @@ diff_plot <- ggplot(
     "Hot Wet"  = "#c1dff5"
   ), na.value = "gray85")
 
+diff_plot_runoff
+
+ggsave("data/park/GLAC/Figs/Diff_plot_runoff.tif", diff_plot, width = 7, height = 4, dpi = 600)
+
+diff_plot <- ggplot(
+  future_differentials %>%
+    dplyr::mutate(GCM_Meta = ifelse(GCM_Meta %in% c("Warm Dry", "Hot Wet"), "Other", GCM_Meta)),
+ aes(x = reorder(GCM, delta_seasonal_inflow_gal),
+      y = delta_seasonal_inflow_gal,
+      fill = GCM_Meta)
+) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  labs(x = "", y = "Change in Seasonal (June-September) Inflow (gal)") +
+  theme(axis.text.x = element_text(angle = 76, vjust = 0.5, hjust = 0.5)) +
+  scale_fill_manual("", values = c(
+    "Hot Dry"  = nps_pal$red,
+    "Warm Wet" = nps_pal$blue,
+    "Low Skill" = "black",
+    "Other"    = "gray80",
+    "Warm Dry" = "rosybrown1",
+    "Hot Wet"  = "#c1dff5"
+  ), na.value = "gray85")
+
 diff_plot
 
-ggsave("data/park/GLAC/Figs/Diff_plot.tif", diff_plot, width = 7, height = 4, dpi = 600)
+ggsave("data/park/GLAC/Figs/Diff_plot_inflow.tif", diff_plot, width = 7, height = 4, dpi = 600)
 ```
 
 ##### Site Figure
 
 ```{r figure_site}
 # Define spatial extents for the two map panels
-fig_aoi <- park_boundary %>%
-  st_buffer(1000) %>% st_bbox() %>% st_as_sfc() %>% st_as_sf() %>% st_transform(4326)
-
-fig_aoi_small <- recharge_area %>%
-  st_bbox() %>% st_as_sfc() %>% st_as_sf() %>% st_transform(4326)
+fig_aoi <- st_buffer(recharge_area, 1200) %>% st_transform(4326)
 
 # Road network from OSM
-roads <- opq(bbox = st_bbox(fig_aoi)) %>%
-  add_osm_feature(key = "highway") %>%
-  osmdata_sf()
+#roads <- opq(bbox = st_bbox(fig_aoi)) %>%
+#  add_osm_feature(key = "highway") %>%
+#  osmdata_sf()
 
-roads <- roads$osm_lines %>%
-  mutate(road_type = case_when(
-    highway %in% c("motorway", "trunk", "primary")    ~ "Major Highway",
-    highway %in% c("secondary", "tertiary")           ~ "Primary Road",
-    TRUE                                               ~ "Local/Minor"
-  )) %>%
-  filter(road_type != "Local/Minor")
+#roads <- roads$osm_lines %>%
+#  mutate(road_type = case_when(
+#    highway %in% c("motorway", "trunk", "primary")    ~ "Major Highway",
+#    highway %in% c("secondary", "tertiary")           ~ "Primary Road",
+#    TRUE                                               ~ "Local/Minor"
+#  )) %>%
+#  filter(road_type != "Local/Minor")
 
-# Named natural features
-places      <- opq(bbox = st_bbox(fig_aoi)) %>%
-  add_osm_feature(key = "natural",
-                  value = c("peak", "volcano", "saddle", "cliff", "bare_rock")) %>%
-  osmdata_sf()
-place_points <- places$osm_points %>%
-  filter(!is.na(name)) %>%
-  st_transform(3857)
-
-# Basemap tiles
-tile_maps  <- get_tiles(x = fig_aoi, provider = "CartoDB.PositronOnlyLabels",
-                        zoom = 10, project = FALSE)
-tile_maps2 <- get_tiles(x = fig_aoi, provider = "Esri.WorldTopoMap",
-                        zoom = 10, project = FALSE)
-
-# Elevation raster
-elev_ras <- elevatr::get_elev_raster(locations = fig_aoi, z = 10)
 
 # Site figure (tmap v4)
 tmap_mode("plot")
 
 site_fig <-
-  tm_shape(
-    sel_bldg %>%
-      dplyr::mutate(label = gsub("HBD Logan Pass Building ", "", BLDGNAME) %>% gsub("[[:digit:]]", "", .)) %>%
-      st_centroid(),
-    bbox = st_buffer(recharge_area, 800)
-  ) +
-  tm_dots(fill = "gray", col = "white", lwd = 1.5, shape = 21, size = 0.8) +
-  tm_labels(text = "label", col = "white", bgcol = "black", bgcol_alpha = 0.3) +
-
-  tm_shape(recharge_area %>% st_transform(3857) %>% dplyr::mutate(name = "Contributing Area")) +
-  tm_polygons(fill = "name",
+  # --- Watersheds (Categorical Legend) ---
+  tm_shape(watersheds, bbox = fig_aoi) +
+  tm_polygons(fill = "name", 
+              fill.scale = tm_scale_categorical(values = c("#9DBE94", "#7F96AD")), 
+              fill_alpha = 0.3, 
+              col = "white", 
+              lwd = 1,
+              fill.legend = tm_legend(title = "Watersheds")) + 
+  
+  # --- Contributing Area ---
+  tm_shape(recharge_area %>% st_transform(3857) %>% dplyr::mutate(group = "Contributing Area")) +
+  tm_polygons(fill = "group",
               fill.scale = tm_scale_categorical(values = "dodgerblue"),
               fill_alpha = 0.2, col = "dodgerblue4", lwd = 1.5,
               fill.legend = tm_legend(title = "", show = TRUE)) +
 
-  tm_shape(select_sources %>% dplyr::mutate(name = "Logan Pass Water Intake")) +
-  tm_dots(fill = pal$darkblue, col = "white", lwd = 1.5, shape = 21, size = 0.8) +
-  tm_labels(text = "name", col = "white", bgcol = "black", bgcol_alpha = 0.3) +
+  # --- Buildings ---
+  tm_shape(
+    sel_bldg %>%
+      dplyr::mutate(label = gsub("HBD Logan Pass Building ", "", BLDGNAME) %>% 
+                      gsub("[[:digit:]]", "", .)) %>%
+      st_centroid()
+  ) +
+  tm_dots(fill = "gray40", col = "white", lwd = 1, shape = 21, size = 0.8) +
+  tm_text("label", 
+          col = "white", 
+          bgcol = "black", 
+          bgcol_alpha = 0.3,
+          size = 1.1,
+          remove.overlap = TRUE, 
+          # xmod stays in the main call in v4
+          xmod = 0.5, 
+          options = opt_tm_text(
+            point.label = TRUE, 
+            just = "left"
+          )) + 
 
+  # --- Water Intake ---
+  tm_shape(select_sources %>% dplyr::mutate(group = "Logan Pass Water Intake")) +
+  tm_dots(fill = pal$darkblue, col = "white", lwd = 1.5, shape = 21, size = 0.8) +
+  tm_text("group", 
+          col = "white", 
+          bgcol = "black", 
+          bgcol_alpha = 0.3,
+          size = 1.1,
+          fontface = "bold",
+          remove.overlap = TRUE,
+          # ymod stays in the main call in v4
+          ymod = 0.8,
+          options = opt_tm_text(
+            point.label = TRUE
+          )) + 
+
+  # --- Layout and Extras ---
   tm_basemap(server = "Esri.WorldImagery") +
-  tm_layout(legend.outside = FALSE, legend.position = c("left", "top"),
-            frame = FALSE, legend.frame = FALSE,
-            legend.bg.color = "white", legend.bg.alpha = 1,
-            legend.title.size = 0.8, legend.text.size = 0.8) +
-  tm_scalebar(position = c("left", "bottom"), text.size = 1,
-              bg.color = "white", bg.alpha = 1) +
-  tm_compass(position = c("right", "top"), size = 2,
-             text.color = "white", text.size = 1, bg.color = "white", bg.alpha = 0.2)
+  tm_layout(legend.outside = FALSE, 
+            legend.position = c("left", "top"),
+            frame = FALSE, 
+            legend.bg.color = "white", 
+            legend.bg.alpha = 1,
+            legend.title.size = 1.1, 
+            legend.text.size = 1.1) +
+  tm_scalebar(position = c("left", "bottom"), text.size = 1.1, bg.color = "white", bg.alpha = 1) +
+  tm_compass(position = c("right", "top"), size = 2, text.size = 1.1, text.color = "white", bg.color = "white", bg.alpha = 0.2)
+
 
 site_fig
 
