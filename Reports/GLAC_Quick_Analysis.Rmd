@@ -1149,6 +1149,7 @@ future_differentials <- future %>%
     delta_runoff_in           = mean_runoff_in - baseline$mean_runoff_in,
     delta_inflow_gal          = mean_inflow_gal - baseline$mean_inflow_gal,
     delta_seasonal_inflow_gal = mean_seasonal_inflow_gal - baseline$mean_seasonal_inflow_gal,
+    delta_seasonal_inflow_per = 100 * (mean_seasonal_inflow_gal - baseline$mean_seasonal_inflow_gal) / baseline$mean_seasonal_inflow_gal,
     delta_runoff_per          = 100 * (mean_runoff_in - baseline$mean_runoff_in) / baseline$mean_runoff_in,
     delta_precip_per          = 100 * (mean_precip_in - baseline$mean_precip_in) / baseline$mean_precip_in,
     delta_runoff_in_sd        = sd_runoff_in  - baseline$sd_runoff_in,
@@ -2474,16 +2475,18 @@ kable(SD)
 ##### Differentials Figure
 
 ```{r figure_differentials}
-diff_plot_runoff <- ggplot(
+
+ggarrange(
+ggplot(
   future_differentials %>%
     dplyr::mutate(GCM_Meta = ifelse(GCM_Meta %in% c("Warm Dry", "Hot Wet"), "Other", GCM_Meta)),
- aes(x = reorder(GCM, delta_runoff_in),
-     y = delta_runoff_in,
+ aes(x = reorder(GCM, delta_runoff_per),
+     y = delta_runoff_per,
      fill = GCM_Meta)
 ) +
   geom_bar(stat = "identity") +
   theme_bw() +
-  labs(x = "", y = "Change in Annual Runoff (in)") +
+  labs(x = "", y = "Change in Annual Runoff (%)") +
   theme(axis.text.x = element_text(angle = 76, vjust = 0.5, hjust = 0.5)) +
   scale_fill_manual("", values = c(
     "Hot Dry"  = nps_pal$red,
@@ -2492,22 +2495,21 @@ diff_plot_runoff <- ggplot(
     "Other"    = "gray80",
     "Warm Dry" = "rosybrown1",
     "Hot Wet"  = "#c1dff5"
-  ), na.value = "gray85")
+  ), na.value = "gray85"),
 
-diff_plot_runoff
+#diff_plot_runoff
 
-ggsave("data/park/GLAC/Figs/Diff_plot_runoff.tif", diff_plot, width = 7, height = 4, dpi = 600)
-
-diff_plot <- ggplot(
+#ggsave("data/park/GLAC/Figs/Diff_plot_runoff.tif", diff_plot_runoff, width = 7, height = 4, dpi = 600)
+ggplot(
   future_differentials %>%
     dplyr::mutate(GCM_Meta = ifelse(GCM_Meta %in% c("Warm Dry", "Hot Wet"), "Other", GCM_Meta)),
- aes(x = reorder(GCM, delta_seasonal_inflow_gal),
-      y = delta_seasonal_inflow_gal,
+ aes(x = reorder(GCM, delta_seasonal_inflow_per),
+      y = delta_seasonal_inflow_per,
       fill = GCM_Meta)
 ) +
   geom_bar(stat = "identity") +
   theme_bw() +
-  labs(x = "", y = "Change in Seasonal (June-September) Inflow (gal)") +
+  labs(x = "", y = "Change in Seasonal Inflow (%)\n (June-September)") +
   theme(axis.text.x = element_text(angle = 76, vjust = 0.5, hjust = 0.5)) +
   scale_fill_manual("", values = c(
     "Hot Dry"  = nps_pal$red,
@@ -2515,12 +2517,14 @@ diff_plot <- ggplot(
     "Low Skill" = "black",
     "Other"    = "gray80",
     "Warm Dry" = "rosybrown1",
-    "Hot Wet"  = "#c1dff5"
-  ), na.value = "gray85")
+    "Hot Wet"  = "#c1dff5"), na.value = "gray85"),
+  align = "hv", 
+ncol = 1,
+common.legend = TRUE,
+legend = "bottom")
 
-diff_plot
+ggsave("data/park/GLAC/Figs/Diff_plot.tif", width = 7, height = 8, dpi = 600)
 
-ggsave("data/park/GLAC/Figs/Diff_plot_inflow.tif", diff_plot, width = 7, height = 4, dpi = 600)
 ```
 
 ##### Site Figure
