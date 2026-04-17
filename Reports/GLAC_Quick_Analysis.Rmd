@@ -1719,6 +1719,19 @@ sp <- ggplot(season_summary, aes(y = factor(year))) +
 sp
 
 
+# --- 3. Future Operating Season Projection (DOY-averaged) ---
+fut_season_summary <- wbm %>%
+  dplyr::filter(year(date) %in% 2035:2064) %>%
+  dplyr::mutate(year = year(date),
+                month = month(date)) %>%
+  group_by(year, CF) %>%
+  dplyr::summarize(
+    june_snowpack = mean(snowpack_in_wbm[month == 6], na.rm = TRUE),
+    .groups       = "drop"
+  ) %>%
+  dplyr::mutate(start_doy = predict(start_date_mod, newdata = .)) %>%
+  dplyr::mutate(plot_start = as.Date(start_doy - 1, origin = "2000-01-01")) 
+
 all_season_summary <- wbm %>%
   dplyr::filter(year(date) > 2015, year(date) < 2026,
                 month(date) > 4,   month(date) < 10) %>%
@@ -1727,8 +1740,8 @@ all_season_summary <- wbm %>%
     tmean_F_s         = frollmean(tmean_F, 7),
     snowpack_in_wbm_s = frollmean(snowpack_in_wbm, 7),
     doy               = yday(date)
-  ) %>%
-  left_join(fut_season_summary, by = "doy")
+  ) #%>%
+  #left_join(fut_season_summary, by = "doy")
 
 season_summary_stats <- all_season_summary %>%
   dplyr::mutate(year = year(date), month = month(date)) %>%
@@ -1744,20 +1757,6 @@ season_summary_stats <- all_season_summary %>%
   dplyr::mutate(start_doy = yday(start_date), end_doy = yday(end_date))
 
 start_date_mod <- lm(start_doy ~ june_snowpack, season_summary_stats)
-
-# --- 3. Future Operating Season Projection (DOY-averaged) ---
-fut_season_summary <- wbm %>%
-  dplyr::filter(year(date) %in% 2035:2064) %>%
-  dplyr::mutate(year = year(date),
-                month = month(date)) %>%
-  group_by(year, CF) %>%
-  dplyr::summarize(
-    june_snowpack = mean(snowpack_in_wbm[month == 6], na.rm = TRUE),
-    .groups       = "drop"
-  ) %>%
-  dplyr::mutate(start_doy = predict(start_date_mod, newdata = .)) %>%
-  dplyr::mutate(plot_start = as.Date(start_doy - 1, origin = "2000-01-01"))
-
 
 
 # --- 4. Snowpack vs Season Timing Panel ---
@@ -1776,36 +1775,6 @@ ggarrange(
 
 ggsave("data/park/GLAC/Figs/visitor_season.jpg", dpi = 600, width = 8, height = 2.5)
 
-# --- 5. Explore Future Climate Impact on Season Timing ---
-# Temperature overlay: historical vs future climate futures, by year
-ggplot(all_season_summary) +
-  geom_line(aes(x = date, y = tmean_F_s,      color = "Historical")) +
-  geom_line(aes(x = date, y = tmean_f_hot_dry,  color = "Hot Dry"),  alpha = 0.5) +
-  geom_line(aes(x = date, y = tmean_f_warm_wet, color = "Warm Wet"), alpha = 0.5) +
-  geom_linerange(data = season_summary,
-                 aes(y = 40, xmin = start_date, xmax = end_date, color = "Operating Season"),
-                 size = 2, alpha = 0.8) +
-  theme_bw() +
-  facet_wrap(~year, scales = "free_x") +
-  scale_color_manual("", values = c("Historical" = "black",
-                                    "Hot Dry"    = nps_pal$red,
-                                    "Warm Wet"   = nps_pal$blue,
-                                    "Operating Season" = "gray"))
-
-# Snowpack overlay: historical vs future climate futures, by year
-ggplot(all_season_summary) +
-  geom_line(aes(x = date, y = snowpack_in_wbm_s,       color = "Historical")) +
-  geom_line(aes(x = date, y = snowpack_in_wbm_hot_dry,  color = "Hot Dry"),  alpha = 0.5) +
-  geom_line(aes(x = date, y = snowpack_in_wbm_warm_wet, color = "Warm Wet"), alpha = 0.5) +
-  geom_linerange(data = season_summary,
-                 aes(y = 9, xmin = start_date, xmax = end_date, color = "Operating Season"),
-                 size = 2, alpha = 0.8) +
-  theme_bw() +
-  facet_wrap(~year, scales = "free_x") +
-  scale_color_manual("", values = c("Historical"       = "black",
-                                    "Hot Dry"          = nps_pal$red,
-                                    "Warm Wet"         = nps_pal$blue,
-                                    "Operating Season" = "gray"))
 ```
 
 ```{r supply_and_inflow}
@@ -2955,13 +2924,6 @@ ggsave(precip_extreme$fig, filename = "data/park/GLAC/Figs/Extreme_Precip_events
        dpi = 600, height = 3, width = 7.5)
 ```
 
-```{r supply_v_inflow}
-
-ggplot()
-
-
-```
-
 
 ```{r extreme_runoff_frequency}
 runoff_extreme <- make_extreme_event_fig(
@@ -2982,8 +2944,9 @@ ggsave(runoff_extreme$fig, filename = "data/park/GLAC/Figs/Extreme_Runoff_events
 ```{r figure_seasonal}
 # Aggregate WBM to seasonal (Winter/Spring/Summer/Fall) × year × CF
 sum_cols_s  <- c("aet_in_wbm", "melt_in_wbm", "pet_in_wbm", "rain_in_wbm",
-                 "runoff_in_wbm", "snow_in_wbm", "precip_in_wbm", "runoff_gal", "runoff_cf")
-mean_cols_s <- c("tmean_C")
+                 "runoff_in_wbm", "snow_in_wbm", "precip_in_wbm", "runoff_gal", 
+                 "runoff_cf")
+mean_cols_s <- c("tmean_C", "inflow_gal")
 
 seasonal_wbm <- wbm %>%
   dplyr::mutate(
@@ -2995,6 +2958,7 @@ seasonal_wbm <- wbm %>%
     ),
     year = year(date)
   ) %>%
+  filter_analysis_periods() %>%
   dplyr::select(-c(date, GCM)) %>%
   dplyr::group_by(year, season, CF) %>%
   dplyr::summarize(
@@ -3009,7 +2973,8 @@ seasonal_stats <- seasonal_wbm %>%
   dplyr::group_by(year, CF) %>%
   dplyr::mutate(runoff_fraction = 100 * runoff_in_wbm / sum(runoff_in_wbm)) %>%
   dplyr::group_by(CF, season) %>%
-  dplyr::summarize(runoff = mean(runoff_in_wbm), runoff_fraction = mean(runoff_fraction),
+  dplyr::summarize(runoff = mean(runoff_in_wbm), 
+                   runoff_fraction = mean(runoff_fraction),
                    .groups = "keep") %>%
   dplyr::group_by(CF, season) %>%
   dplyr::summarize(runoff_fraction = sum(runoff_fraction), runoff = mean(runoff))
@@ -3046,7 +3011,8 @@ seasonal_fig <- ggarrange(
   seasonal_box_panel(seasonal_data, "snow_in_wbm",    "Snowmelt (in)"),
   seasonal_box_panel(seasonal_data, "aet_in_wbm",     "AET (in)"),
   seasonal_box_panel(seasonal_data, "runoff_in_wbm",  "Runoff (in)"),
-  common.legend = TRUE, legend = "bottom", nrow = 2, ncol = 2
+  seasonal_box_panel(seasonal_data, "inflow_gal",     "Inflow (gal)"),
+  common.legend = TRUE, legend = "bottom", nrow = 3, ncol = 2, align = "hv"
 )
 
 seasonal_fig
