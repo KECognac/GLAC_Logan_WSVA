@@ -23,7 +23,7 @@ knitr::opts_chunk$set(
 
 # --- 2. Load Data and Dependencies ---
 # Load site-specific datasets for GLAC
-#load("data/park/GLAC/GLAC_data.RData")
+load("data/park/GLAC/GLAC_data.RData")
 
 # Source custom functions and libraries (loads tidyverse, sf, etc.)
 source('setup.R')
@@ -196,16 +196,8 @@ The database contains a row for each water supply system and source of water
 table_path <- "data/Water_Supply_Systems/NPS_Water_Systems_Database_Joined.xlsx"
 
 # Import database and convert to spatial (sf) object
-WSD <- read_excel(table_path, sheet = 1, na = c("NA", "U"), skip = 1) %>%
-  as.data.frame() %>%
-  dplyr::filter(park_unit == park) %>%
-  # Remove records missing spatial coordinates
-  drop_na(c("source_longitude", "source_latitude")) %>%
-  st_as_sf(
-    coords = c("source_longitude", "source_latitude"),
-    crs    = 4326,
-    remove = FALSE
-  )
+WSD <- get_wsd() %>%
+  dplyr::filter(park_unit == park)
 
 # --- 2. Target Site Selection ---
 # Filter for Logan Pass infrastructure
@@ -242,11 +234,8 @@ mapview(park_boundary,
 
 # --- 5. Spatial Visualization: Logan Pass Focus ---
 # Filter buildings within 1 km of the selected sources
-sel_bldg <- buildings %>%
+sel_bldg <- getBuildings() %>%
   st_filter(st_buffer(st_transform(select_sources, st_crs(buildings)), 1000))
-
-rm(buildings)
-gc()
 
 mapview(select_sources$watershed,
         color        = "dodgerblue",
