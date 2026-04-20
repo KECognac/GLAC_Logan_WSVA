@@ -9,84 +9,53 @@
 #' @param save Whether to save the resulting file (TRUE/FALSE)
 #' @param path If `save == TRUE`, the file path to save to
 #' @return An sf object of weather stations within given spatial boundary and attributes
-getSNOTEL <-
-  function(aoi,
-           dist = 0,
-           years = "all",
-           timeseries = "Daily",
-           save = FALSE,
-           path = NULL) {
+getSNOTEL <- function(aoi, 
+                      dist = 0, 
+                      years = "all", 
+                      timeseries = "Daily", 
+                      save = FALSE, 
+                      path = NULL) {
     
-    # add buffer around area of interest
-    aoi <- aoi %>%
-      sf::st_buffer(dist = dist)
+    # 1. Buffer and Transform AOI 
+    aoi_buf <- st_buffer(aoi, dist = dist)
+    aoi_wgs84 <- st_transform(aoi_buf, 4326)
     
-    #read in all stations and make spatial
+    # 2. Filter sites quickly using WGS84
     data('SCAN_SNOTEL_metadata', package = 'soilDB')
+    sites <- st_as_sf(SCAN_SNOTEL_metadata, coords = c("Longitude", "Latitude"), crs = 4326)
     
-    sites <-
-      st_as_sf(
-        SCAN_SNOTEL_metadata,
-        coords = c("Longitude", "Latitude"),
-        crs = 4326
-      )
+    site_aoi <- sites[aoi_wgs84, ] # Spatial Subset
     
+    if (nrow(site_aoi) == 0) return(message("No sites found."))
     
-    #filter to park
-    site_aoi <- sites %>%
-      st_transform(st_crs(aoi)) %>%
-      st_filter(aoi) %>%
-      distinct(Site, .keep_all = TRUE) %>%
-      sf::st_join(aoi) %>%
-      dplyr::select(Name,
-                    Site,
-                    State,
-                    County = countyName,
-                    beginDate,
-                    endDate,
-                    #Network,
-                    Elevation_ft,
-                    HUC,
-                    #UNIT_CODE, # Only for Park Units
-                    geometry) %>%
-      dplyr::mutate(start_year = ifelse(years %in% c("all","All"), year(beginDate), min(as.numeric(years))),
-                    end_year = ifelse(years %in% c("all", "All"), year(Sys.Date()), max(as.numeric(years))))
-    # add option to filter stations/vars that are logged up to a certain year?
-    
-    #download data for each site
-    siteID <- unique(site_aoi$Site)
-    
-    dat <- vector("list", length(siteID))
-    
-    for (i in 1:length(siteID)) {
-      dat[[i]] <- soilDB::fetchSCAN(site.code = siteID[i], 
-                                    year = c(site_aoi[site_aoi$Site == siteID[i],]$start_year:site_aoi[site_aoi$Site == siteID[i],]$end_year),
-                                    timeseries = "Daily") %>%
-        map(~ mutate_all(., as.character)) %>%
-        bind_rows() %>%
-        as_tibble() %>%
-        #remove metadata columns
-        dplyr::select(-(Name:pedlabsampnum))
+    # 3. Determine Year Range
+    # Use years[1] to check the first element of the input
+    if (years[1] == "all") {
+      start_yr <- min(lubridate::year(site_aoi$beginDate), na.rm = TRUE)
+      end_yr   <- lubridate::year(Sys.Date())
+    } else {
+      # If it's a vector like 2010:2012, we just take the min and max
+      start_yr <- min(as.numeric(years))
+      end_yr   <- max(as.numeric(years))
     }
     
+    # 4. BATCH REQUEST 
+    message(paste("Fetching data for", nrow(site_aoi), "sites in one go..."))
     
-    final_data <- bind_rows(dat) %>%
-      left_join(site_aoi, by = "Site") %>% #tie back to site metadata
-      st_as_sf() %>%
-      clean_names() %>%
-      mutate(
-        across(any_of(c("value", "elevation_ft", "depth", "water_year", "start_year", "end_year")), as.numeric),
-        across(any_of(c("date", "datetime")), as.Date)
-      )
+    # fetchSCAN returns a list of dataframes
+    all_dat_list <- soilDB::fetchSCAN(
+      site.code = site_aoi$Site, 
+      year = start_yr:end_yr, 
+      timeseries = timeseries
+    )
     
+    metadata <- all_dat_list[names(all_dat_list) == "metadata"]$metadata
     
-    
-    if (save == TRUE) {
-      st_write(final_data, paste0(path, "/SNOTEL.shp"), append = FALSE)
-      
-    }
+    # 5. Clean up efficiently
+    final_data <- all_dat_list[names(all_dat_list) != "metadata"] %>%
+      purrr::map(~ mutate(.x, across(everything(), as.character))) %>%
+      bind_rows() %>%
+      left_join(metadata, by = "Site")
     
     return(final_data)
-    
-  }
-
+}
