@@ -8,13 +8,24 @@
 #' with the respective park unit's centroid.
 #' @param park Character vector. Optional list of four-letter park unit codes (e.g., c("ROMO", "GRCA")).
 #' @param sf Logical. If TRUE (default), returns the data as an sf spatial object (CRS: 4326).
+#' @param rapid Logical. If TRUE, applies "Rapid" assessment presets: forces CONUS, 
+#'   fills missing coords, and filters to NPS-operated systems only (non-muncipal/hauled/tribal/concession)
 #'
 #' @return A data frame or sf object containing processed water supply system data.
 #' @export
 get_wsd <- function(conus = TRUE,
                     fill_empty_coords = FALSE,
                     park = NULL,
-                    sf = TRUE) {
+                    sf = TRUE,
+                    rapid = FALSE) {
+  
+  
+  if (rapid == TRUE) {
+    # override these args for rapid
+    fill_empty_coords <- TRUE
+    sf <- TRUE
+    conus <- TRUE
+  }
   
   # --- Error Checking: File Existence ---
   table_path <- "data/Water_Supply_Systems/NPS_Water_Systems_Database_Joined.xlsx"
@@ -34,6 +45,14 @@ get_wsd <- function(conus = TRUE,
       source_longitude = as.numeric(source_longitude),
       source_latitude = as.numeric(source_latitude)
     )
+  
+  if (rapid == TRUE) {
+    WSD_raw <- WSD_raw %>%
+      # Filter to CONUS & NPS-Operated Systems only
+      dplyr::filter(!str_detect(source_type, 
+                                regex("municipal|hauled|tribal|purchased",
+                                            ignore_case = TRUE)))
+  }
   
   # --- Handle Coordinate Filling ---
   # Moved this ABOVE drop_na so we actually have something to fill
