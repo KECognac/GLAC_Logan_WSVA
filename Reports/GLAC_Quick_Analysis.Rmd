@@ -2481,7 +2481,7 @@ ncol = 1,
 common.legend = TRUE,
 legend = "bottom")
 
-ggsave("data/park/GLAC/Figs/Diff_plot.tif", width = 7, height = 8, dpi = 600)
+ggsave("data/park/GLAC/Figs/Diff_plot.jpg", width = 7, height = 8, dpi = 600)
 
 ```
 
@@ -3029,13 +3029,15 @@ snowmelt_stats_d <- wbm %>%
     melt_frac_mean        = mean(melt_frac,        na.rm = TRUE),
     snow_frac_precip_mean = mean(snow_frac_precip, na.rm = TRUE),
     snowmelt              = mean(melt_in_wbm,      na.rm = TRUE),
-    runoff                = mean(runoff_gal,        na.rm = TRUE),
+    runoff                = mean(runoff_gal,       na.rm = TRUE),
+    inflow                = mean(inflow_gal,       na.rm = TRUE),
     .groups = "drop"
   ) %>%
   group_by(CF) %>%
   dplyr::mutate(
     snowmelt_mov = data.table::frollmean(snowmelt, 5, align = "center", na.rm = TRUE),
     runoff_mov   = data.table::frollmean(runoff,   5, align = "center", na.rm = TRUE),
+    inflow_mov   = data.table::frollmean(inflow,   5, align = "center", na.rm = TRUE),
     doy_date     = as.Date(doy, origin = "2019-12-31")
   ) %>%
   dplyr::mutate(CF = factor(CF, levels = c("Historical", "Warm Wet", "Hot Dry")))
@@ -3065,7 +3067,7 @@ sm_fraction_fig <- ggplot(pdat_sm) +
   geom_line(aes(x = year, y = melt_frac, group = CF), color = "black", lwd = 2, lineend = "round") +
   geom_line(aes(x = year, y = melt_frac, color = CF), lwd = 1.5, lineend = "round") +
   theme_bw() +
-  labs(x = "", y = "Snowmelt Fraction of Runoff") +
+  labs(x = "", y = "Snowmelt Fraction of Runoff (-)") +
   scale_color_cf() +
   theme_legend_bottom
 
@@ -3083,16 +3085,16 @@ sm_timing_fig <- ggplot(snowmelt_stats_d, aes(x = doy_date, color = CF)) +
   theme_legend_bottom
 
 dis_timing_fig <- ggplot(snowmelt_stats_d, aes(x = doy_date, color = CF)) +
-  geom_point(aes(y = runoff), alpha = 0.3) +
-  geom_line(aes(y = runoff_mov, group = CF), linewidth = 2, color = "black", lineend = "round") +
-  geom_line(aes(y = runoff_mov), linewidth = 1.5, lineend = "round") +
+  geom_point(aes(y = inflow), alpha = 0.3) +
+  geom_line(aes(y = inflow_mov, group = CF), linewidth = 2, color = "black", lineend = "round") +
+  geom_line(aes(y = inflow_mov), linewidth = 1.5, lineend = "round") +
   geom_vline(data = peak_runoff,
              aes(color = CF, xintercept = doy_date, linetype = "Peak Runoff"), lwd = 1.5, alpha = 0.5) +
   theme_bw() +
   scale_x_date(date_breaks = "1 month", date_labels = "%b %d") +
   scale_color_cf("DOY Mean &\n5-Day\nRolling Mean") +
   scale_linetype_manual("", values = c(1)) +
-  labs(y = "Mean Daily Runoff (gallons)", x = "") +
+  labs(y = "Mean Daily Inflow (gallons)\n(Routed Runoff)", x = "") +
   theme_legend_bottom
 
 sm_fig <- ggarrange(sm_fraction_fig, sm_timing_fig, dis_timing_fig,
@@ -3101,6 +3103,11 @@ sm_fig
 
 ggsave(sm_fig, filename = "data/park/GLAC/Figs/Snowmelt.tif",
        dpi = 600, units = "in", height = 7.5, width = 7.5)
+
+ggplotly(
+  dis_timing_fig
+)
+
 ```
 
 #### SPEI Drought Plot
