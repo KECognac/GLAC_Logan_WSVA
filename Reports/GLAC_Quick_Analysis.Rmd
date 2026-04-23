@@ -443,17 +443,39 @@ snotel_annual <- snotel_tidy %>%
   )
 
 # --- 5. Visualization: Annual SWE Trends ---
-ggplot(snotel_annual, aes(x = water_year, y = wteq,
-                          color = name, fill = name)) +
+# Pre-calculate the 5th quantiles for the specific sites
+thresholds <- snotel_annual %>%
+  dplyr::filter(name %in% c("Flattop Mtn.", "Many Glacier")) %>%
+  dplyr::group_by(name) %>%
+  dplyr::summarize(q05 = quantile(wteq, 0.05, na.rm = TRUE),
+                   q10 = quantile(wteq, 0.1, na.rm = TRUE))
+
+# Build the plot
+ggplot(snotel_annual, aes(x = water_year, y = wteq, color = name)) +
   geom_point(alpha = 0.6) +
   geom_line(alpha = 0.3, lwd = 0.8) +
+  
+  # Add horizontal lines using the pre-calculated thresholds
+  geom_hline(data = thresholds, 
+             aes(yintercept = q10, color = name), 
+             linetype = "dashed", lwd = 0.8) +
+  
+  # Add text labels just above the lines
+  geom_text(data = thresholds, 
+            aes(x = min(snotel_annual$water_year), y = q10, 
+                label = paste("10th percentile:", round(q10, 1), "in")),
+            hjust = 0, vjust = -0.5, size = 3.5, show.legend = FALSE) +
+  
   theme_bw() +
   scale_color_colorblind("SNOTEL Site") +
-  scale_fill_colorblind("SNOTEL Site") +
   labs(title = "Annual Maximum Snow Water Equivalent (SWE)",
+       subtitle = "Dashed lines indicate 5th percentile (historical dry extremes)",
        x = "Water Year",
-       y = "Max SWE (inches)") +
+       y = "Max SWE (inches)",
+       color = "SNOTEL Site") +
   theme(legend.position = "bottom")
+
+ggsave("data/park/GLAC/Figs/Snotel_sites.jpg", width = 7, height = 3, dpi = 600)
 
 # --- 6. Memory Cleanup ---
 rm(snotel)
@@ -3332,133 +3354,135 @@ ggsave(track_storage_fig, filename = "data/park/GLAC/Figs/track_storage_10kgal.t
 
 Can only run this section if the WBM output is not yet spatially aggregated.
 
+This section is commented out because the final saved workflow uses an aggregated version of the WBM. To re-run this section, simply re-run the water balance model with argument "aggregate = FALSE".
+
 ```{r wbm_xy_stats}
-wbm_xy_stats <- wbm_all %>%
-  dplyr::mutate(
-    year       = year(date),
-    stat_period = ifelse(year < 2013, "Baseline",
-                  ifelse(year > 2034 & year < 2065, "Future", "Other"))
-  ) %>%
-  dplyr::filter(stat_period != "Other") %>%
-  dplyr::select(GCM, stat_period, x, y, Skill, precip_in_wbm, tmean_C, runoff_in_wbm, pet_in_wbm) %>%
-  dplyr::group_by(GCM, stat_period, Skill, x, y) %>%
-  dplyr::summarize(
-    mean_precip_in          = mean(precip_in_wbm),
-    mean_tmean_C            = mean(tmean_C),
-    mean_runoff_in          = mean(runoff_in_wbm),
-    median_runoff_in        = quantile(runoff_in_wbm, 0.75),
-    sd_runoff_in            = sd(runoff_in_wbm),
-    cv_runoff_in            = sd(runoff_in_wbm) / mean(runoff_in_wbm),
-    iqr_runoff_in           = as.numeric(quantile(runoff_in_wbm, 0.75)) -
-                              as.numeric(quantile(runoff_in_wbm, 0.25)),
-    q90_q10_runoff_in       = as.numeric(quantile(runoff_in_wbm, 0.9)) -
-                              as.numeric(quantile(runoff_in_wbm, 0.1)),
-    peak_runoff_in          = max(runoff_in_wbm),
-    mean_precip_minus_pet_in = mean(precip_in_wbm - pet_in_wbm),
-    fract_zero_runoff       = sum(runoff_in_wbm == 0) / n(),
-    .groups = "keep"
-  )
-
-baseline_xy <- wbm_xy_stats %>%
-  dplyr::filter(stat_period == "Baseline") %>%
-  rename_with(~ paste0(.x, "_baseline"),
-              all_of(c("mean_precip_in", "mean_tmean_C", "mean_runoff_in",
-                        "median_runoff_in", "sd_runoff_in", "cv_runoff_in",
-                        "iqr_runoff_in", "q90_q10_runoff_in", "peak_runoff_in",
-                        "mean_precip_minus_pet_in", "fract_zero_runoff"))) %>%
-  ungroup() %>%
-  dplyr::select(-stat_period)
-
-future_xy <- wbm_xy_stats %>%
-  dplyr::filter(stat_period != "Baseline") %>%
-  ungroup() %>%
-  dplyr::select(-stat_period)
-
-future_differentials_xy <- future_xy %>%
-  dplyr::ungroup() %>%
-  left_join(baseline_xy %>% dplyr::ungroup() %>% dplyr::select(-c(GCM, Skill)),
-            by = c("x", "y")) %>%
-  dplyr::mutate(
-    delta_precip_in    = mean_precip_in - mean_precip_in_baseline,
-    delta_tmean_C      = mean_tmean_C   - mean_tmean_C_baseline,
-    delta_runoff_in    = 365.25 * (mean_runoff_in - mean_runoff_in_baseline),
-    delta_runoff_in_sd = sd_runoff_in   - sd_runoff_in_baseline
-  ) %>%
-  dplyr::mutate(centroid_cf = ifelse(centroid_cf %in% c("Hot Dry", "Warm Wet"),
-                                     centroid_cf,
-                                     ifelse(Skill == "Low Skill", "Low Skill", "Other"))) %>%
-  dplyr::mutate(RCP = str_sub(GCM, -5)) %>%
-  dplyr::left_join(
-    selected_gcms[[1]] %>%
-      dplyr::filter(CF %in% c("Hot Dry", "Warm Wet")) %>%
-      dplyr::select(GCM, "select_CF" = CF),
-    by = "GCM"
-  ) %>%
-  dplyr::mutate(
-    GCM_Meta = case_when(
-      centroid_cf == "Low Skill" ~ "Low Skill",
-      !is.na(select_CF)          ~ select_CF,
-      TRUE                       ~ "Other"
-    )
-  )
-
-future_differentials_xy_sf <- future_differentials_xy %>%
-  dplyr::ungroup() %>%
-  st_as_sf(coords = c("x", "y"), crs = 4326, remove = FALSE)
-
-# --- Runoff delta raster (stars) ---
-runoff_raster <- future_differentials_xy %>%
-  dplyr::mutate(x = round(x, 4), y = round(y, 4)) %>%
-  dplyr::select(x, y, GCM, delta_runoff_in) %>%
-  st_as_stars(dims = c("x", "y", "GCM"), dx = 4000, dy = 4000)
-
-ggplot() +
-  geom_stars(data = runoff_raster) +
-  geom_sf(data = select_sources$watershed[[1]], fill = NA, color = "black", linewidth = 0.5) +
-  facet_wrap(~GCM, nrow = 5) +
-  scale_fill_distiller(palette = "RdBu", name = "Delta Runoff (in)",
-                       direction = 1, na.value = "transparent") +
-  theme_minimal() +
-  labs(title = "30-Year Runoff Delta by GCM") +
-  theme(legend.position = "bottom",
-        axis.text = element_blank(), axis.ticks = element_blank())
-
-ggsave("data/park/GLAC/Figs/delta_runoff_grid.jpg", dpi = 600)
-
-# --- Density distribution of delta runoff per grid cell ---
-ggplot(future_differentials_xy %>%
-         dplyr::mutate(loc = paste0("Coords: ", round(x, 3), " , ", round(y, 3)))) +
-  geom_density(aes(x = delta_runoff_in), fill = "steelblue", color = "white") +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "red", linewidth = 1) +
-  facet_wrap(~loc, scales = "free_y") +
-  theme_minimal() +
-  labs(title    = "Distribution of Projected Delta Runoff",
-       subtitle = "Dashed line represents zero change (baseline)",
-       x        = "Delta Runoff (inches)",
-       y        = "Density")
+# wbm_xy_stats <- wbm_all %>%
+#   dplyr::mutate(
+#     year       = year(date),
+#     stat_period = ifelse(year < 2013, "Baseline",
+#                   ifelse(year > 2034 & year < 2065, "Future", "Other"))
+#   ) %>%
+#   dplyr::filter(stat_period != "Other") %>%
+#   dplyr::select(GCM, stat_period, x, y, Skill, precip_in_wbm, tmean_C, runoff_in_wbm, pet_in_wbm) %>%
+#   dplyr::group_by(GCM, stat_period, Skill, x, y) %>%
+#   dplyr::summarize(
+#     mean_precip_in          = mean(precip_in_wbm),
+#     mean_tmean_C            = mean(tmean_C),
+#     mean_runoff_in          = mean(runoff_in_wbm),
+#     median_runoff_in        = quantile(runoff_in_wbm, 0.75),
+#     sd_runoff_in            = sd(runoff_in_wbm),
+#     cv_runoff_in            = sd(runoff_in_wbm) / mean(runoff_in_wbm),
+#     iqr_runoff_in           = as.numeric(quantile(runoff_in_wbm, 0.75)) -
+#                               as.numeric(quantile(runoff_in_wbm, 0.25)),
+#     q90_q10_runoff_in       = as.numeric(quantile(runoff_in_wbm, 0.9)) -
+#                               as.numeric(quantile(runoff_in_wbm, 0.1)),
+#     peak_runoff_in          = max(runoff_in_wbm),
+#     mean_precip_minus_pet_in = mean(precip_in_wbm - pet_in_wbm),
+#     fract_zero_runoff       = sum(runoff_in_wbm == 0) / n(),
+#     .groups = "keep"
+#   )
+# 
+# baseline_xy <- wbm_xy_stats %>%
+#   dplyr::filter(stat_period == "Baseline") %>%
+#   rename_with(~ paste0(.x, "_baseline"),
+#               all_of(c("mean_precip_in", "mean_tmean_C", "mean_runoff_in",
+#                         "median_runoff_in", "sd_runoff_in", "cv_runoff_in",
+#                         "iqr_runoff_in", "q90_q10_runoff_in", "peak_runoff_in",
+#                         "mean_precip_minus_pet_in", "fract_zero_runoff"))) %>%
+#   ungroup() %>%
+#   dplyr::select(-stat_period)
+# 
+# future_xy <- wbm_xy_stats %>%
+#   dplyr::filter(stat_period != "Baseline") %>%
+#   ungroup() %>%
+#   dplyr::select(-stat_period)
+# 
+# future_differentials_xy <- future_xy %>%
+#   dplyr::ungroup() %>%
+#   left_join(baseline_xy %>% dplyr::ungroup() %>% dplyr::select(-c(GCM, Skill)),
+#             by = c("x", "y")) %>%
+#   dplyr::mutate(
+#     delta_precip_in    = mean_precip_in - mean_precip_in_baseline,
+#     delta_tmean_C      = mean_tmean_C   - mean_tmean_C_baseline,
+#     delta_runoff_in    = 365.25 * (mean_runoff_in - mean_runoff_in_baseline),
+#     delta_runoff_in_sd = sd_runoff_in   - sd_runoff_in_baseline
+#   ) %>%
+#   dplyr::mutate(centroid_cf = ifelse(centroid_cf %in% c("Hot Dry", "Warm Wet"),
+#                                      centroid_cf,
+#                                      ifelse(Skill == "Low Skill", "Low Skill", "Other"))) %>%
+#   dplyr::mutate(RCP = str_sub(GCM, -5)) %>%
+#   dplyr::left_join(
+#     selected_gcms[[1]] %>%
+#       dplyr::filter(CF %in% c("Hot Dry", "Warm Wet")) %>%
+#       dplyr::select(GCM, "select_CF" = CF),
+#     by = "GCM"
+#   ) %>%
+#   dplyr::mutate(
+#     GCM_Meta = case_when(
+#       centroid_cf == "Low Skill" ~ "Low Skill",
+#       !is.na(select_CF)          ~ select_CF,
+#       TRUE                       ~ "Other"
+#     )
+#   )
+# 
+# future_differentials_xy_sf <- future_differentials_xy %>%
+#   dplyr::ungroup() %>%
+#   st_as_sf(coords = c("x", "y"), crs = 4326, remove = FALSE)
+# 
+# # --- Runoff delta raster (stars) ---
+# runoff_raster <- future_differentials_xy %>%
+#   dplyr::mutate(x = round(x, 4), y = round(y, 4)) %>%
+#   dplyr::select(x, y, GCM, delta_runoff_in) %>%
+#   st_as_stars(dims = c("x", "y", "GCM"), dx = 4000, dy = 4000)
+# 
+# ggplot() +
+#   geom_stars(data = runoff_raster) +
+#   geom_sf(data = select_sources$watershed[[1]], fill = NA, color = "black", linewidth = 0.5) +
+#   facet_wrap(~GCM, nrow = 5) +
+#   scale_fill_distiller(palette = "RdBu", name = "Delta Runoff (in)",
+#                        direction = 1, na.value = "transparent") +
+#   theme_minimal() +
+#   labs(title = "30-Year Runoff Delta by GCM") +
+#   theme(legend.position = "bottom",
+#         axis.text = element_blank(), axis.ticks = element_blank())
+# 
+# ggsave("data/park/GLAC/Figs/delta_runoff_grid.jpg", dpi = 600)
+# 
+# # --- Density distribution of delta runoff per grid cell ---
+# ggplot(future_differentials_xy %>%
+#          dplyr::mutate(loc = paste0("Coords: ", round(x, 3), " , ", round(y, 3)))) +
+#   geom_density(aes(x = delta_runoff_in), fill = "steelblue", color = "white") +
+#   geom_vline(xintercept = 0, linetype = "dashed", color = "red", linewidth = 1) +
+#   facet_wrap(~loc, scales = "free_y") +
+#   theme_minimal() +
+#   labs(title    = "Distribution of Projected Delta Runoff",
+#        subtitle = "Dashed line represents zero change (baseline)",
+#        x        = "Delta Runoff (inches)",
+#        y        = "Density")
 ```
 
 ```{r explore_differences}
 # Inspect WBM parameters for target grid cell
-test_params <- get_nps_wbm_params(clim_pts, area_weighted = FALSE) %>%
-  dplyr::mutate(Elev_ft = Elev / 0.3048) %>%
-  dplyr::filter(x <= -113.72 & x > -113.72 - 0.04,
-                y >= 48.69   & y < 48.69 + 0.04)
-
-fut_dif_summary <- future_differentials_xy %>%
-  dplyr::filter(x <= -113.72 & x > -113.72 - 0.04,
-                y >= 48.69   & y < 48.69 + 0.04) %>%
-  dplyr::group_by(x, y) %>%
-  dplyr::summarize(
-    delta_runoff_in_mean = mean(delta_runoff_in,   na.rm = TRUE),
-    delta_runoff_in_med  = median(delta_runoff_in, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  left_join(test_params, by = c("x", "y"))
-
-ggpairs(fut_dif_summary %>% ungroup() %>%
-          dplyr::select(-c(x, y, area_weight, geometry)) %>%
-          st_drop_geometry())
+# test_params <- get_nps_wbm_params(clim_pts, area_weighted = FALSE) %>%
+#   dplyr::mutate(Elev_ft = Elev / 0.3048) %>%
+#   dplyr::filter(x <= -113.72 & x > -113.72 - 0.04,
+#                 y >= 48.69   & y < 48.69 + 0.04)
+# 
+# fut_dif_summary <- future_differentials_xy %>%
+#   dplyr::filter(x <= -113.72 & x > -113.72 - 0.04,
+#                 y >= 48.69   & y < 48.69 + 0.04) %>%
+#   dplyr::group_by(x, y) %>%
+#   dplyr::summarize(
+#     delta_runoff_in_mean = mean(delta_runoff_in,   na.rm = TRUE),
+#     delta_runoff_in_med  = median(delta_runoff_in, na.rm = TRUE),
+#     .groups = "drop"
+#   ) %>%
+#   left_join(test_params, by = c("x", "y"))
+# 
+# ggpairs(fut_dif_summary %>% ungroup() %>%
+#           dplyr::select(-c(x, y, area_weight, geometry)) %>%
+#           st_drop_geometry())
 ```
 
 
