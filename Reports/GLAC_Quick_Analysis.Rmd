@@ -469,7 +469,6 @@ ggplot(snotel_annual, aes(x = water_year, y = wteq, color = name)) +
   theme_bw() +
   scale_color_colorblind("SNOTEL Site") +
   labs(title = "Annual Maximum Snow Water Equivalent (SWE)",
-       subtitle = "Dashed lines indicate 5th percentile (historical dry extremes)",
        x = "Water Year",
        y = "Max SWE (inches)",
        color = "SNOTEL Site") +
