@@ -1131,7 +1131,7 @@ all_clim_stats <- wbm_all %>%
     mean_precip_in         = 365.25 * mean(precip_in_wbm),
     mean_tmean_C           = mean(tmean_C),
     mean_runoff_in         = 365.25 * mean(runoff_in_wbm),
-    median_runoff_in       = quantile(runoff_in_wbm, 0.75),
+    median_runoff_in       = quantile(runoff_in_wbm, 0.5),
     mean_inflow_gal        = 365.25 * mean(inflow_gal),
     mean_seasonal_inflow_gal = 122 * mean(seasonal_inflow_gal), # June, July, Aug, Sept only so 122 days
     sd_runoff_in           = sd(runoff_in_wbm),
