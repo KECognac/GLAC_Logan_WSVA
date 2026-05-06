@@ -516,6 +516,9 @@ usgs_discharge <- read_waterdata_daily(
 nearest_usgs_sw <- nearest_usgs_sw %>%
   dplyr::filter(monitoring_location_id %in% unique(usgs_discharge$monitoring_location_id))
 
+# distance to Logan Pass
+nearest_usgs_sw %>% select(monitoring_location_name, dist_m) %>% print()
+
 # Join station metadata to discharge records
 usgs_discharge <- usgs_discharge %>%
   left_join(
@@ -598,27 +601,77 @@ ggplot(usgs_discharge_doy, aes(x = doy_date, color = period, fill = period)) +
 ggsave("data/park/GLAC/Figs/usgs_discharge_regional.jpg", dpi = 600, width = 10, height = 7)
 
 # --- 8. Plot: 2025 Focus (Swiftcurrent Creek) ---
-ggplot(usgs_discharge_doy %>%
+# 1. Create a helper column to handle the wrap-around
+usgs_discharge_wy <- usgs_discharge_doy %>%
+  mutate(
+    # Create a date that shifts Oct-Dec to the previous 'dummy' year
+    # so the axis naturally starts at October
+    wy_date = if_else(month(doy_date) >= 10, 
+                      doy_date %m-% years(1), 
+                      doy_date)
+  )
+
+# 2. Apply the same logic to your 2025 data
+usgs_2025_wy <- usgs_discharge_doy_2025 %>%
+  mutate(wy_date = if_else(month(doy_date) >= 10, 
+                           doy_date %m-% years(1), 
+                           doy_date))
+
+# --- Plot: 2025 Focus (Swiftcurrent Creek) ---
+ggplot(usgs_discharge_wy %>%
          filter(monitoring_location_name == "Swiftcurrent Creek at Many Glacier MT"),
-       aes(x = doy_date, color = period, fill = period)) +
+       aes(x = wy_date, color = period, fill = period)) +
   geom_ribbon(aes(ymin = discharge_min, ymax = discharge_max), alpha = 0.4, lwd = 0) +
   geom_line(aes(y = discharge), lwd = 0.8) +
-  geom_line(data = usgs_discharge_doy_2025 %>%
+  geom_line(data = usgs_2025_wy %>%
               filter(monitoring_location_name == "Swiftcurrent Creek at Many Glacier MT"),
-            aes(x = doy_date, y = discharge, color = "2025"), lwd = 1) +
-  geom_text(data = facet_labels %>%
-              filter(monitoring_location_name == "Swiftcurrent Creek at Many Glacier MT"),
-            aes(x = x_pos, y = y_pos, label = full_label),
-            inherit.aes = FALSE,
-            hjust = -0.2, vjust = 1.3, size = 3, lineheight = 0.9) +
+            aes(x = wy_date, y = discharge, color = "2025"), lwd = 1) +
+  # ... [Your geom_text remains similar, just update x = x_pos if it's date-based] ...
   theme_bw() +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b", expand = c(0, 0)) +
+  # This scale will now naturally start in October
+  scale_x_date(date_breaks = "1 month", 
+               date_labels = "%b", 
+               expand = c(0, 0)) +
   scale_color_manual("Period", values = c("2025" = "black", "early" = pal$orange, "late" = pal$darkblue)) +
   scale_fill_manual("Period",  values = c("2025" = "black", "early" = pal$orange, "late" = pal$darkblue)) +
-  labs(x = "Day of Year", y = "Discharge (cfs)") +
+  labs(x = "Month of Water Year", y = "Discharge (cfs)") +
   theme(legend.position = "right")
 
 ggsave("data/park/GLAC/Figs/usgs_discharge_2025_focus.jpg", dpi = 600, width = 7, height = 3)
+
+# Compare watershed size
+
+# Extract the site IDs
+swiftcurrent_watershed <- nearest_usgs_sw %>%
+  filter(str_detect(monitoring_location_name, "Swiftcurrent Creek")) %>%
+  pull(hydrologic_unit_code) %>%
+  get_huc(id = .)
+
+swiftcurrent_watershed_area <- swiftcurrent_watershed %>%
+  st_area() %>%
+  set_units("km^2") # or "sqft"
+
+
+# Get Swiftcurren elevation range
+sc_dem <- get_elev_raster(swiftcurrent_watershed, z = 10, clip = "bbox") %>%
+  rast() %>% 
+  mask(vect(swiftcurrent_watershed))
+
+ca_dem <- get_elev_raster(recharge_area, z = 10, clip = "bbox") %>%
+  rast() %>%
+  mask(vect(recharge_area))
+
+#Extract Min and Max elev
+sc_stats <- minmax(sc_dem)
+ca_stats <- minmax(ca_dem)
+
+
+
+
+# Print results
+message(paste0("Elevation Range: ", round(elev_range, 2), " meters"))
+
+
 ```
 
 #### ----- USGS Groundwater
@@ -1686,6 +1739,11 @@ annual_vis_mod_plot <- ggarrange(
     geom_line(aes(x = year, y = LoganVisitors, color = "Observed"), size = 1) +
     geom_line(aes(x = year, y = pred_vis,      color = "Modeled"),  size = 1) +
     theme_bw() +
+    theme(
+      legend.position        = c(0.85, 0.25),   # x, y in [0,1] plot coordinates
+      legend.background      = element_rect(fill = alpha("white", 0.7), color = NA),
+      legend.key             = element_blank()
+    ) +
     annotate("text",
              label = as.character(as.expression(bquote(R^2 == .(r2_val) ~~~ p < .(p_val)))),
              parse = TRUE, x = -Inf, y = Inf, hjust = -0.1, vjust = 1.5,
@@ -1704,18 +1762,26 @@ annual_vis_mod_plot <- ggarrange(
   ggplot(vis_mod_dat, aes(x = LoganVisitors, y = pred_vis)) +
     geom_abline(intercept = 0, slope = 1, linetype = "dotted", size = 1) +
     geom_point(alpha = 0.7, size = 2) +
-    theme_bw() + coord_equal() +
+    theme_bw() +
+    scale_x_continuous(limits = c(
+      min(vis_mod_dat$LoganVisitors, vis_mod_dat$pred_vis),
+      max(vis_mod_dat$LoganVisitors, vis_mod_dat$pred_vis)
+    )) +
+    scale_y_continuous(limits = c(
+      min(vis_mod_dat$LoganVisitors, vis_mod_dat$pred_vis),
+      max(vis_mod_dat$LoganVisitors, vis_mod_dat$pred_vis)
+    )) +
     labs(x = "Observed Annual Visitors", y = "Modeled Annual Visitors",
          title = "1:1 Accuracy"),
 
-  ncol = 1, align = "v"
+  ncol = 1, align = "hv"
 )
 
 annual_vis_mod_plot
 
 ggsave(plot     = annual_vis_mod_plot,
-       filename = "data/park/GLAC/Figs/Annual_vis_mod.tiff",
-       dpi = 600, width = 7, height = 5)
+       filename = "data/park/GLAC/Figs/Annual_vis_mod.jpg",
+       dpi = 600, width = 7, height = 4.5)
 ```
 
 ```{r proj_vis}
@@ -2253,7 +2319,8 @@ ggplot(
     "Other"    = "gray80",
     "Warm Dry" = "rosybrown1",
     "Hot Wet"  = "#c1dff5"
-  ), na.value = "gray85"),
+  ), na.value = "gray85") +
+  theme(legend.position = "bottom", legend.margin = margin(t = -20, b = 0, l = 0, r = 0)),
 
 #diff_plot_runoff
 
@@ -2275,7 +2342,8 @@ ggplot(
     "Low Skill" = "black",
     "Other"    = "gray80",
     "Warm Dry" = "rosybrown1",
-    "Hot Wet"  = "#c1dff5"), na.value = "gray85"),
+    "Hot Wet"  = "#c1dff5"), na.value = "gray85") + 
+  theme(legend.position = "bottom", legend.margin = margin(t = -20, b = 0, l = 0, r = 0)),
   align = "hv", 
 ncol = 1,
 common.legend = TRUE,
@@ -2309,14 +2377,20 @@ fig_aoi <- st_buffer(recharge_area, 1200) %>% st_transform(4326)
 tmap_mode("plot")
 
 site_fig <-
-  # --- Watersheds (Categorical Legend) ---
-  tm_shape(watersheds, bbox = fig_aoi) +
+  # --- Watersheds (Modified Legend labels) ---
+  tm_shape(
+    watersheds %>% 
+      # Append " Watershed" to each item in the name column
+      dplyr::mutate(name = paste0(name, " Watershed")), 
+    bbox = fig_aoi
+  ) +
   tm_polygons(fill = "name", 
-              fill.scale = tm_scale_categorical(values = c("#9DBE94", "#7F96AD")), 
-              fill_alpha = 0.3, 
+              fill.scale = tm_scale_categorical(values = c("hotpink", "#7F96AD")), 
+              fill_alpha = 0.2, 
               col = "white", 
               lwd = 1,
-              fill.legend = tm_legend(title = "Watersheds")) + 
+              # Remove the legend title since it's now redundant
+              fill.legend = tm_legend(title = "")) + 
   
   # --- Contributing Area ---
   tm_shape(recharge_area %>% st_transform(3857) %>% dplyr::mutate(group = "Contributing Area")) +
@@ -2380,6 +2454,101 @@ site_fig
 tmap_save(site_fig, dpi = 600,
           filename = "data/park/GLAC/Figs/Site_Fig.jpg", width = 7, height = 7)
 ```
+
+#### Inset Figure
+```{r inset_figure_site}
+# Define spatial extents for the two map panels
+inset_fig_aoi <- st_buffer(park_boundary, 100) %>% st_transform(4326)
+
+url <- "https://data.openwaterfoundation.org/country/us/usgs/continental-divide/continental-divide-us.geojson"
+continental_divide <- st_read(url) %>%
+  st_filter(inset_fig_aoi)
+mapview(continental_divide)
+
+# Site figure (tmap v4)
+tmap_mode("plot")
+
+inset_site_fig <-
+  
+  # --- Watersheds (Categorical Legend) ---
+  tm_shape(park_boundary, bbox = inset_fig_aoi) +
+  tm_polygons(fill = "seagreen",
+              fill_alpha = 0.2,
+              col = "seagreen") + 
+  tm_text("UNIT_NAME", # or whatever your park name column is called
+          size = 1.3, 
+          fontface = "bold.italic",
+          col = "seagreen4",
+          # Using shadow/bg for readability against the topo map
+          bgcol = "white",
+          bgcol_alpha = 0.4,
+          remove.overlap = TRUE, 
+          ymod = 2.5,
+        options = opt_tm_text(point.label = TRUE)) +
+  
+  # --- Watersheds 
+  tm_shape(watersheds) +
+  tm_polygons(fill = "name", 
+              fill.scale = tm_scale_categorical(values = c("hotpink", "#7F96AD")), 
+              col.scale = tm_scale_categorical(values = c("hotpink", "#7F96AD")),
+              fill_alpha = 0.5, 
+              #col = "white", 
+              lwd = 1,
+              fill.legend = tm_legend(show = FALSE)) + 
+  
+  # --- Continental Divide
+  tm_shape(continental_divide) +
+  tm_lines(col = "black",
+           lwd = 2,
+           lty = "dashed") + 
+  
+  # --- Contributing Area ---
+  #tm_shape(recharge_area %>% st_transform(3857) %>% dplyr::mutate(group = "Contributing Area")) +
+  #tm_polygons(fill = "group",
+  #            fill.scale = tm_scale_categorical(values = "dodgerblue"),
+  #            fill_alpha = 0.2, col = "dodgerblue4", lwd = 1.5,
+  #            fill.legend = tm_legend(title = "", show = TRUE)) +
+
+  # --- Water Intake ---
+  tm_shape(select_sources %>% dplyr::mutate(group = "Logan Pass")) +
+  tm_dots(fill = "black", col = "white", lwd = 1, shape = 21, size = .8) +
+  tm_text("group", 
+          col = "black", 
+          bgcol = "white", 
+          bgcol_alpha = 0.3,
+          size = 1.1,
+          fontface = "bold",
+          remove.overlap = TRUE,
+          # ymod stays in the main call in v4
+          ymod = 0.1,
+          options = opt_tm_text(
+            point.label = TRUE
+          )) + 
+
+  # --- Layout and Extras ---
+  tm_basemap(server = "Esri.WorldTopoMap") +
+  
+  # --- Layout and Extras ---
+  tm_layout(frame = FALSE, 
+            # Ensure the basemap doesn't force the extent too wide
+            main.title.size = 1.1,
+            legend.outside = FALSE, 
+            legend.position = c("left", "top"),
+            legend.bg.color = "white", 
+            legend.bg.alpha = 1,
+            legend.title.size = 1.1, 
+            legend.text.size = 1.1) +
+  tm_compass(position = c("left", "bottom"), size = 2, text.size = 1.1, text.color = "white", bg.color = "white", bg.alpha = 0.2) +
+  tm_scalebar(position = c("left", "bottom"), text.size = 1.1, bg.color = "white", bg.alpha = 1)
+
+
+inset_site_fig
+
+tmap_save(inset_site_fig, dpi = 600,
+          filename = "data/park/GLAC/Figs/Inset_Site_Fig.jpg", width = 3, height = 3)
+```
+
+
 
 #### Daily recorded S & D
 ```{r daily_use_demand_plot}
