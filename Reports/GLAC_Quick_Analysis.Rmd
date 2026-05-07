@@ -568,6 +568,22 @@ usgs_discharge_doy_2025 <- usgs_discharge %>%
   summarize(discharge = mean(value, na.rm = TRUE), .groups = "drop") %>%
   mutate(doy_date = as.Date(doy, origin = "2019-12-31"), period = "2025")
 
+usgs_discharge_wy <- usgs_discharge_doy %>%
+  mutate(
+    # Create a date that shifts Oct-Dec to the previous 'dummy' year
+    # so the axis naturally starts at October
+    wy_date = if_else(month(doy_date) >= 10, 
+                      doy_date %m-% years(1), 
+                      doy_date)
+  )
+
+# 2. Apply the same logic to your 2025 data
+usgs_2025_wy <- usgs_discharge_doy_2025 %>%
+  mutate(wy_date = if_else(month(doy_date) >= 10, 
+                           doy_date %m-% years(1), 
+                           doy_date))
+
+
 # --- 6. Build Facet Labels ---
 facet_labels <- usgs_discharge_doy %>%
   group_by(monitoring_location_name, period) %>%
@@ -601,23 +617,7 @@ ggplot(usgs_discharge_doy, aes(x = doy_date, color = period, fill = period)) +
 ggsave("data/park/GLAC/Figs/usgs_discharge_regional.jpg", dpi = 600, width = 10, height = 7)
 
 # --- 8. Plot: 2025 Focus (Swiftcurrent Creek) ---
-# 1. Create a helper column to handle the wrap-around
-usgs_discharge_wy <- usgs_discharge_doy %>%
-  mutate(
-    # Create a date that shifts Oct-Dec to the previous 'dummy' year
-    # so the axis naturally starts at October
-    wy_date = if_else(month(doy_date) >= 10, 
-                      doy_date %m-% years(1), 
-                      doy_date)
-  )
 
-# 2. Apply the same logic to your 2025 data
-usgs_2025_wy <- usgs_discharge_doy_2025 %>%
-  mutate(wy_date = if_else(month(doy_date) >= 10, 
-                           doy_date %m-% years(1), 
-                           doy_date))
-
-# --- Plot: 2025 Focus (Swiftcurrent Creek) ---
 ggplot(usgs_discharge_wy %>%
          filter(monitoring_location_name == "Swiftcurrent Creek at Many Glacier MT"),
        aes(x = wy_date, color = period, fill = period)) +
@@ -3213,6 +3213,7 @@ ggsave(seasonal_fig, filename = "data/park/GLAC/Figs/Seasonal.tif",
 ##### Snowmelt Runoff
 
 ```{r figure_snowmelt}
+
 # Daily snowmelt fraction statistics (DOY × CF)
 snowmelt_stats_d <- wbm %>%
   dplyr::filter(year(date) <= 2012 | (year(date) >= 2035 & year(date) < 2065)) %>%
@@ -3240,14 +3241,20 @@ snowmelt_stats_d <- wbm %>%
     inflow_mov   = data.table::frollmean(inflow,   5, align = "center", na.rm = TRUE),
     doy_date     = as.Date(doy, origin = "2019-12-31")
   ) %>%
-  dplyr::mutate(CF = factor(CF, levels = c("Historical", "Warm Wet", "Hot Dry")))
+  dplyr::mutate(CF = factor(CF, levels = c("Historical", "Warm Wet", "Hot Dry"))) %>%
+  dplyr::mutate(
+    # Shift Oct-Dec back one year to force the axis to start in October
+    wy_date = if_else(month(doy_date) >= 10, 
+                      doy_date %m-% years(1), 
+                      doy_date)
+  )
 
 snowmelt_stats_summary <- snowmelt_stats_d %>%
   dplyr::group_by(CF) %>%
   dplyr::summarize(melt_frac_mean = mean(melt_frac_mean, na.rm = TRUE))
 
-peak_melt   <- snowmelt_stats_d %>% slice_max(snowmelt_mov)
-peak_runoff <- snowmelt_stats_d %>% slice_max(runoff_mov)
+peak_melt   <- snowmelt_stats_d %>% group_by(CF) %>% slice_max(snowmelt_mov)
+peak_runoff <- snowmelt_stats_d %>% group_by(CF) %>% slice_max(runoff_mov)
 
 # Annual melt fraction time series
 pdat_sm <- wbm_annual %>%
@@ -3259,8 +3266,9 @@ pdat_sm <- wbm_annual %>%
     melt_frac        = melt_run / (melt_run + rain_run),
     rain_frac        = rain_run / (melt_run + rain_run),
     CF               = factor(CF, levels = c("Historical", "Warm Wet", "Hot Dry"))
-  )
+  ) 
 
+# Top figure - snowmelt fraction of runoff through time
 sm_fraction_fig <- ggplot(pdat_sm) +
   geom_rect(aes(xmin = 2035, xmax = 2065, ymin = -Inf, ymax = Inf),
             fill = "lightgrey", alpha = 0.1) +
@@ -3271,27 +3279,31 @@ sm_fraction_fig <- ggplot(pdat_sm) +
   scale_color_cf() +
   theme_legend_bottom
 
-sm_timing_fig <- ggplot(snowmelt_stats_d, aes(x = doy_date, color = CF)) +
+# --- Snowmelt Timing Figure (Water Year) ---
+sm_timing_fig <- ggplot(snowmelt_stats_d, aes(x = wy_date, color = CF)) +
   geom_point(aes(y = snowmelt), alpha = 0.3) +
   geom_line(aes(y = snowmelt_mov, group = CF), linewidth = 2, color = "black", lineend = "round") +
   geom_line(aes(y = snowmelt_mov), linewidth = 1.5, lineend = "round") +
   geom_vline(data = peak_melt,
-             aes(color = CF, xintercept = doy_date, linetype = "Peak Melt"), lwd = 1.5, alpha = 0.5) +
+             aes(color = CF, xintercept = wy_date, linetype = "Peak Melt"), lwd = 1.5, alpha = 0.5) +
   theme_bw() +
   scale_color_cf("DOY Mean &\n5-Day\nRolling Mean") +
   scale_linetype_manual("", values = c(1)) +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b %d") +
+  # Use %b to show only the short month name (Jan, Feb, etc.)
+  scale_x_date(date_breaks = "1 month", date_labels = "%b") +
   labs(y = "Mean Daily Snowmelt (in)", x = "") +
   theme_legend_bottom
 
-dis_timing_fig <- ggplot(snowmelt_stats_d, aes(x = doy_date, color = CF)) +
+# --- Inflow Timing Figure (Water Year) ---
+dis_timing_fig <- ggplot(snowmelt_stats_d, aes(x = wy_date, color = CF)) +
   geom_point(aes(y = inflow), alpha = 0.3) +
   geom_line(aes(y = inflow_mov, group = CF), linewidth = 2, color = "black", lineend = "round") +
   geom_line(aes(y = inflow_mov), linewidth = 1.5, lineend = "round") +
   geom_vline(data = peak_runoff,
-             aes(color = CF, xintercept = doy_date, linetype = "Peak Runoff"), lwd = 1.5, alpha = 0.5) +
+             aes(color = CF, xintercept = wy_date, linetype = "Peak Runoff"), lwd = 1.5, alpha = 0.5) +
   theme_bw() +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b %d") +
+  # Use %b to show only the short month name
+  scale_x_date(date_breaks = "1 month", date_labels = "%b") +
   scale_color_cf("DOY Mean &\n5-Day\nRolling Mean") +
   scale_linetype_manual("", values = c(1)) +
   labs(y = "Mean Daily Inflow (gallons)\n(Routed Runoff)", x = "") +
@@ -3304,9 +3316,7 @@ sm_fig
 ggsave(sm_fig, filename = "data/park/GLAC/Figs/Snowmelt.tif",
        dpi = 600, units = "in", height = 7.5, width = 7.5)
 
-ggplotly(
-  dis_timing_fig
-)
+
 
 ```
 
