@@ -10,6 +10,6 @@
 #' vapor_curve()
 
 vapor_curve = function(temp){
-  vap.curve = 4098*(0.6108*exp((17.27*temp/(temp+237.3)))/(temp+273.3)^2)
+  vap.curve = 4098*(0.6108*exp((17.27*temp/(temp+237.3)))/(temp+237.3)^2)
   return(vap.curve)
 }
