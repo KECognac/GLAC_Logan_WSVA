@@ -3106,7 +3106,9 @@ sp <- ggplot(season_summary, aes(y = factor(year))) +
                  size = 3, color = "seagreen", alpha = 0.8) +
   geom_text(aes(x = plot_end, label = paste0(duration_days, " days")),
             hjust = -0.2, size = 3.5, color = "grey30") +
-  scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  scale_x_date(date_labels = "%b", date_breaks = "1 month",
+               limits = c(as.Date(format(min(season_summary$plot_start), "%Y-06-01")),
+                          NA)) +
   coord_cartesian(clip = "off") +
   theme_minimal() +
   labs(title = "Season Duration", x = "", y = "") +
@@ -3161,11 +3163,11 @@ ggarrange(
   sp,
   ggplot(season_summary_stats, aes(x = june_snowpack, y = plot_start)) +
     geom_point() + geom_smooth(method = "lm", color = "seagreen") +
-    geom_point(data = fut_season_summary, aes(x = june_snowpack, y = plot_start, color = CF)) +
+    #geom_point(data = fut_season_summary, aes(x = june_snowpack, y = plot_start, color = CF)) +
     theme_bw() + labs(y = "Opening Date", x = "Mean June Snowpack (in)"),
   ggplot(season_summary_stats, aes(x = sep_snowpack, y = plot_end)) +
     geom_point() + geom_smooth(method = "lm", color = "seagreen") +
-    theme_bw() + labs(y = "Closing Date", x = "Mean September Snowpack (in)"),
+    theme_bw() + labs(y = "Closing Date", x = "Mean Sep. Snowpack (in)"),
   nrow = 1
 )
 
