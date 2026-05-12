@@ -27,7 +27,8 @@ select_cfs_deep_dive <- function(df,
                                  park = NULL,
                                  fill_var = "CF",
                                  fill_var_name = "Climate Future",
-                                 region = "SWR") {
+                                 region = "SWR",
+                                 highlight = NULL) {
   
   
   # Read in all available gcms
@@ -243,6 +244,9 @@ select_cfs_deep_dive <- function(df,
       geom_vline(aes(xintercept = mean_x), linetype = 2) +
       geom_mark_circle(data = filter(df, GCM %in% selected_gcms$GCM),
                        aes(group = GCM), expand = 0.025, size = 1, linetype = 2) + 
+      {if (!is.null(highlight)) 
+        geom_mark_circle(data = filter(df, GCM %in% selected_gcms$GCM[selected_gcms$CF %in% highlight]),
+                         aes(group = GCM), expand = 0.04, size = 1.5, color = "gold2")} +
       geom_text_repel(aes(label = GCM))
     
     return(list(selected_gcms, p))
