@@ -34,9 +34,6 @@ library(ggpubr)
 library(GGally)
 library(osmdata)
 library(ggpattern)
-library(tidyr)
-library(dplyr)
-library(ggplot2)
 
 # --- 3. Interactive Map Configuration ---
 # Configure mapview defaults for standard Esri basemaps
@@ -234,7 +231,7 @@ mapview(park_boundary,
 
 # --- 5. Spatial Visualization: Logan Pass Focus ---
 # Filter buildings within 1 km of the selected sources
-sel_bldg <- getBuildings() %>%
+sel_bldg <- getBuildings(park_boundary) %>%
   st_filter(st_buffer(st_transform(select_sources, st_crs(buildings)), 1000))
 
 mapview(select_sources$watershed,
@@ -1484,7 +1481,8 @@ low_y  <- "Dry"
 selected_gcms <- select_cfs_deep_dive(
   df = future_differentials,
   x, y, x_name, y_name, high_x, low_x, high_y, low_y,
-  to_plot = TRUE
+  to_plot = TRUE,
+  highlight = c("Hot Dry", "Warm Wet")
 )
 
 # Attach CF labels to future_differentials for downstream plots
@@ -1636,6 +1634,106 @@ monthly_supply_proportions <- wbm_monthly %>%
   ungroup()
 ```
 
+
+```{r wbm_stats}
+
+wbm_stats <- wbm_annual %>%
+  dplyr::filter(year < 2013 | (year > 2034 & year < 2065)) %>%
+  dplyr::group_by(CF) %>%
+  dplyr::summarize(
+    tmean_F                = mean(tmean_F),
+    precip_in              = mean(precip_in_wbm),
+    rain_in                = mean(rain_in_wbm),
+    snow_in                = mean(snow_in_wbm),
+    melt_in                = mean(melt_in_wbm),
+    aet_in                 = mean(aet_in_wbm),
+    pet_in                 = mean(pet_in_wbm),
+    runoff_in              = mean(runoff_in_wbm),
+    runoff_gal             = mean(runoff_gal),
+    inflow_gal             = mean(inflow_gal),
+    inflow_open_months_gal = mean(inflow_open_months_gal)
+  )
+
+# Pull historical row as a named vector for reference
+hist_vals <- wbm_stats %>%
+  dplyr::filter(CF == "Historical") %>%
+  dplyr::select(-CF) %>%
+  as.numeric()
+
+var_names <- wbm_stats %>%
+  dplyr::select(-CF) %>%
+  names()
+
+# Build long-format table: one row per variable
+wbm_stats_long <- tibble::tibble(
+  Variable = var_names,
+  Historical = hist_vals
+) %>%
+  dplyr::left_join(
+    wbm_stats %>%
+      dplyr::filter(CF == "Hot Dry") %>%
+      dplyr::select(-CF) %>%
+      tidyr::pivot_longer(everything(), names_to = "Variable", values_to = "Hot_Dry"),
+    by = "Variable"
+  ) %>%
+  dplyr::left_join(
+    wbm_stats %>%
+      dplyr::filter(CF == "Warm Wet") %>%
+      dplyr::select(-CF) %>%
+      tidyr::pivot_longer(everything(), names_to = "Variable", values_to = "Warm_Wet"),
+    by = "Variable"
+  ) %>%
+  dplyr::mutate(
+    Hot_Dry_pct_change  = (Hot_Dry  - Historical) / Historical * 100,
+    Warm_Wet_pct_change = (Warm_Wet - Historical) / Historical * 100
+  ) %>%
+  dplyr::select(Variable, Historical, Hot_Dry, Hot_Dry_pct_change, Warm_Wet, Warm_Wet_pct_change)
+
+library(knitr)
+library(kableExtra)
+
+# Variables measured in gallons (comma-format, 0 decimals)
+gal_vars <- c("runoff_gal", "inflow_gal", "inflow_open_months_gal")
+
+wbm_stats_long %>%
+  dplyr::mutate(
+    # Value columns: gallons get comma formatting, others get 2 decimals
+    Historical          = dplyr::if_else(Variable %in% gal_vars,
+                            scales::comma(Historical, accuracy = 1),
+                            formatC(Historical, format = "f", digits = 2)),
+    Hot_Dry             = dplyr::if_else(Variable %in% gal_vars,
+                            scales::comma(Hot_Dry, accuracy = 1),
+                            formatC(Hot_Dry, format = "f", digits = 2)),
+    Warm_Wet            = dplyr::if_else(Variable %in% gal_vars,
+                            scales::comma(Warm_Wet, accuracy = 1),
+                            formatC(Warm_Wet, format = "f", digits = 2)),
+    # Percent change columns: 1 decimal + % sign
+    Hot_Dry_pct_change  = paste0(formatC(Hot_Dry_pct_change,  format = "f", digits = 1), "%"),
+    Warm_Wet_pct_change = paste0(formatC(Warm_Wet_pct_change, format = "f", digits = 1), "%"),
+    # Readable variable names
+    Variable = dplyr::recode(Variable,
+      tmean_F                = "Mean Temp (°F)",
+      precip_in              = "Precipitation (in)",
+      rain_in                = "Rain (in)",
+      snow_in                = "Snow (in)",
+      melt_in                = "Snowmelt (in)",
+      aet_in                 = "AET (in)",
+      pet_in                 = "PET (in)",
+      runoff_in              = "Runoff (in)",
+      runoff_gal             = "Runoff (gal)",
+      inflow_gal             = "Inflow (gal)",
+      inflow_open_months_gal = "Operating Season Inflow (gal)"
+    )
+  ) %>%
+  kable(
+    col.names = c("Variable", "Historical", "Hot Dry", "% Change", "Warm Wet", "% Change"),
+    align     = c("l", "r", "r", "r", "r", "r"),
+    caption   = "Mean annual water budget components: historical baseline (1979–2012) vs. mid-century futures (2035–2065)"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE) %>%
+  add_header_above(c(" " = 2, "Hot Dry" = 2, "Warm Wet" = 2))
+
+```
 
 #### Snotel + Weather Comparison Figure
 
@@ -2540,6 +2638,15 @@ kable(SD)
 
 ##### Differentials Figure
 
+```{r selected_futures}
+
+selected_gcms[[2]]
+
+ggsave("data/park/GLAC/Figs/selected_GCMs.jpg", width = 10, height = 7, dpi = 600)
+
+
+```
+
 ```{r figure_differentials}
 
 ggarrange(
@@ -2698,6 +2805,23 @@ site_fig <-
               fill_alpha = 0.2, col = "dodgerblue4", lwd = 1.5,
               fill.legend = tm_legend(title = "", show = TRUE)) +
 
+  # --- Flow lines ---
+tm_shape(flowlines) + 
+  tm_lines(col = "dodgerblue4",
+           lwd = 2) +
+  #tm_text("gnis_name", 
+  #        col = "lightblue3", 
+  #        #bgcol = "black",
+  #        #bgcol_alpha = 0.5,
+  #        size = 0.8, 
+  #        xmod = -1,
+  #        ymod = -5,
+  #        fontface = "italic",
+  #        along_lines = TRUE,
+  #        remove.overlap = TRUE) +
+          #options = opt_tm_text(
+          #  along_lines = TRUE)) +
+  
   # --- Buildings ---
   tm_shape(
     sel_bldg %>%
