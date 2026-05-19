@@ -189,8 +189,6 @@ The database contains a row for each water supply system and source of water
 (e.g., individual wells, diversions, and springs).
 
 ```{r water_supply_db}
-# --- 1. Load and Clean Water Supply Database ---
-table_path <- "data/Water_Supply_Systems/NPS_Water_Systems_Database_Joined.xlsx"
 
 # Import database and convert to spatial (sf) object
 WSD <- get_wsd() %>%
@@ -234,12 +232,12 @@ mapview(park_boundary,
 sel_bldg <- getBuildings(park_boundary) %>%
   st_filter(st_buffer(st_transform(select_sources, st_crs(buildings)), 1000))
 
-mapview(select_sources$watershed,
-        color        = "dodgerblue",
-        alpha.regions = 0.1,
-        col.regions  = "dodgerblue",
-        lwd          = 2,
-        layer.name   = "Auto-Delineated Rch. Area") +
+#mapview(select_sources$watershed,
+#        color        = "dodgerblue",
+#        alpha.regions = 0.1,
+#        col.regions  = "dodgerblue",
+#        lwd          = 2,
+#        layer.name   = "Auto-Delineated Rch. Area") +
   mapview(recharge_area,
           color        = "navy",
           alpha.regions = 0.1,
@@ -390,7 +388,7 @@ snotel_sites <- snotel %>%
   group_by(site) %>%
   dplyr::slice(1) %>%
   ungroup() %>%
-  st_as_sf(coords = c("longitude", "latitude"))
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
 
 # --- 2. Spatial Visualization: Station Locations ---
 mapview(park_boundary,
@@ -2532,12 +2530,37 @@ change <- wbm_annual %>%
   slice(-1) %>%
   mutate(across(everything(), ~ suppressWarnings(as.numeric(as.character(.))))) %>%
   dplyr::mutate(
-    `% Change Hot Dry`  = 100 * (`Hot Dry`  - Historical) / Historical,
-    `% Change Warm Wet` = 100 * (`Warm Wet` - Historical) / Historical
+    `Hot Dry % Change`  = 100 * (`Hot Dry`  - Historical) / Historical,
+    `Warm Wet % Change` = 100 * (`Warm Wet` - Historical) / Historical
   ) %>%
-  dplyr::mutate(across(where(is.numeric), ~ signif(.x, 3)))
+  dplyr::mutate(across(where(is.numeric), ~ signif(.x, 3))) %>%
+  dplyr::mutate(across(c(Historical, `Hot Dry`, `Warm Wet`), ~ .x / 1e6)) %>%
+  tibble::rownames_to_column(var = "row_key") %>%
+  dplyr::mutate(
+    Component = dplyr::case_when(
+      grepl("runoff", row_key) ~ "Runoff",
+      grepl("inflow", row_key) ~ "Inflow"
+    ),
+    Statistic = dplyr::case_when(
+      grepl("_mean$", row_key) ~ "Mean",
+      grepl("_sd$",   row_key) ~ "Standard Deviation"
+    )
+  ) %>%
+  dplyr::mutate(row_order = dplyr::case_when(
+    Component == "Runoff" & Statistic == "Mean"               ~ 1,
+    Component == "Runoff" & Statistic == "Standard Deviation" ~ 2,
+    Component == "Inflow" & Statistic == "Mean"               ~ 3,
+    Component == "Inflow" & Statistic == "Standard Deviation" ~ 4
+  )) %>%
+  dplyr::arrange(row_order) %>%
+  dplyr::select(Component, Statistic, Historical, `Hot Dry`, `Warm Wet`,
+                `Hot Dry % Change`, `Warm Wet % Change`)
 
-kable(change)
+kable(change,
+    caption = "Runoff and Inflow statistics (millions of gallons)"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE)
+
 ```
 
 ##### Table 2: Drought Metrics
@@ -3138,9 +3161,9 @@ all_season_summary <- wbm %>%
     year              = year(date),
     tmean_F_s         = frollmean(tmean_F, 7),
     snowpack_in_wbm_s = frollmean(snowpack_in_wbm, 7),
-    doy               = yday(date)
-  ) #%>%
-  #left_join(fut_season_summary, by = "doy")
+    doy               = yday(date)) %>%
+  left_join(snotel_tidy %>% dplyr::filter(name == "Flattop Mtn."),
+            by = "date")
 
 season_summary_stats <- all_season_summary %>%
   dplyr::mutate(year = year(date), month = month(date)) %>%
@@ -3148,26 +3171,33 @@ season_summary_stats <- all_season_summary %>%
   dplyr::summarize(
     june_tmean_F    = mean(tmean_F[month == 6],        na.rm = TRUE),
     june_snowpack   = mean(snowpack_in_wbm[month == 6], na.rm = TRUE),
+    june_snwd       = mean(snwd_i[month == 6], na.rm = TRUE),
     sep_tmean_F     = mean(tmean_F[month == 9],        na.rm = TRUE),
+    sep_precip      = min(prec_i[month == 9], na.rm = TRUE),
     sep_snowpack    = mean(snowpack_in_wbm[month == 9], na.rm = TRUE),
+    sep_snwd        = mean(snwd_i[month == 9], na.rm = TRUE),
     .groups         = "drop"
   ) %>%
   left_join(season_summary, by = "year") %>%
   dplyr::mutate(start_doy = yday(start_date), end_doy = yday(end_date))
 
-start_date_mod <- lm(start_doy ~ june_snowpack, season_summary_stats)
+start_date_mod <- lm(start_doy ~ june_snwd, season_summary_stats)
 
 
 # --- 4. Snowpack vs Season Timing Panel ---
+
+# Here, we plot mean june snowpack vs opening date and cumulative precipitation
+# on September 1 against closing date. Other variables were tested and these
+# had the strongest relationships.
 ggarrange(
   sp,
-  ggplot(season_summary_stats, aes(x = june_snowpack, y = plot_start)) +
+  ggplot(season_summary_stats, aes(x = june_snwd, y = plot_start)) +
     geom_point() + geom_smooth(method = "lm", color = "seagreen") +
     #geom_point(data = fut_season_summary, aes(x = june_snowpack, y = plot_start, color = CF)) +
-    theme_bw() + labs(y = "Opening Date", x = "Mean June Snowpack (in)"),
-  ggplot(season_summary_stats, aes(x = sep_snowpack, y = plot_end)) +
+    theme_bw() + labs(y = "Opening Date", x = "Mean June\n Snowpack (in)"),
+  ggplot(season_summary_stats, aes(x = sep_precip, y = plot_end)) +
     geom_point() + geom_smooth(method = "lm", color = "seagreen") +
-    theme_bw() + labs(y = "Closing Date", x = "Mean Sep. Snowpack (in)"),
+    theme_bw() + labs(y = "Closing Date", x = "Cumulative Precipitation \nSeptember 1 (in)"),
   nrow = 1
 )
 
