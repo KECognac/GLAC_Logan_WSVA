@@ -3485,7 +3485,7 @@ ggsave(runoff_var, filename = "data/park/GLAC/Figs/Runoff_Var.tif",
 The next two figures use the same analytical workflow applied to different variables. A shared helper function avoids code duplication.
 
 ```{r extreme_event_helper}
-# Computes 3-day rolling event frequency and produces a bar chart figure.
+# Computes 3-day rolling event frequency and intensity, and produces a bar chart figure.
 # wbm_df  : the `wbm` daily data frame
 # var_col : column name for the variable of interest (e.g., "precip_in_wbm")
 # y_label : y-axis label for the plot
@@ -3493,7 +3493,6 @@ The next two figures use the same analytical workflow applied to different varia
 make_extreme_event_fig <- function(wbm_df, var_col, y_label) {
   q_low  <- 0.05
   q_high <- 0.99
-
   df <- wbm_df %>%
     dplyr::rename(cf = CF) %>%
     dplyr::group_by(cf) %>%
@@ -3503,7 +3502,6 @@ make_extreme_event_fig <- function(wbm_df, var_col, y_label) {
       year         = year(date)
     ) %>%
     dplyr::filter(!is.na(rolling_3day))
-
   # Historical quantile thresholds (baseline period only)
   historic_q <- df %>%
     dplyr::filter(cf == "Historical", rolling_3day > 0,
@@ -3513,7 +3511,6 @@ make_extreme_event_fig <- function(wbm_df, var_col, y_label) {
       QLOW  = quantile(rolling_3day, probs = q_low),
       QHIGH = quantile(rolling_3day, probs = q_high)
     )
-
   year_counts <- df %>%
     dplyr::mutate(
       low_day  = as.integer(rolling_3day <= historic_q$QLOW),
@@ -3521,20 +3518,30 @@ make_extreme_event_fig <- function(wbm_df, var_col, y_label) {
       year     = year(date)
     ) %>%
     dplyr::group_by(cf, year) %>%
-    dplyr::summarize(n_low_days = sum(low_day), n_high_days = sum(high_day), .groups = "drop") %>%
+    dplyr::summarize(n_low_days  = sum(low_day),
+                      n_high_days = sum(high_day),
+                      max_3day    = max(rolling_3day, na.rm = TRUE),
+                      .groups = "drop") %>%
     dplyr::mutate(
       CF       = factor(cf, levels = c("Historical", "Hot Dry", "Warm Wet")),
       rect_min = ifelse(cf != "Historical", 2035, 1979),
       rect_max = ifelse(cf != "Historical", 2065, 2012)
     )
-
+  # Frequency + intensity stats over the relevant historical/future windows
   stats <- year_counts %>%
     dplyr::filter((year >= hist_yrs[1] & year < hist_yrs[2]) |
                   (year >= fut_yrs[1]  & year < fut_yrs[2])) %>%
-    group_by(cf) %>%
-    summarize(count = sum(n_high_days, na.rm = TRUE),
-              mean  = mean(n_high_days, na.rm = TRUE))
-
+    dplyr::group_by(cf) %>%
+    dplyr::summarize(
+      count           = sum(n_high_days, na.rm = TRUE),
+      mean            = mean(n_high_days, na.rm = TRUE),
+      max_intensity   = max(max_3day, na.rm = TRUE),
+      .groups = "drop"
+    )
+  # % change in max intensity relative to Historical
+  hist_max <- stats$max_intensity[stats$cf == "Historical"]
+  stats <- stats %>%
+    dplyr::mutate(pct_change_intensity = (max_intensity - hist_max) / hist_max * 100)
   fig <- ggplot(year_counts) +
     geom_rect(aes(xmin = rect_min, xmax = rect_max, ymin = -Inf, ymax = Inf),
               fill = "grey85", linewidth = 0, alpha = 0.1) +
@@ -3549,7 +3556,6 @@ make_extreme_event_fig <- function(wbm_df, var_col, y_label) {
           strip.background   = element_rect(fill = "gray95"),
           strip.text         = element_text(colour = "black", face = "bold")) +
     theme_legend_bottom
-
   list(fig = fig, year_counts = year_counts, quantiles = historic_q, stats = stats)
 }
 ```
