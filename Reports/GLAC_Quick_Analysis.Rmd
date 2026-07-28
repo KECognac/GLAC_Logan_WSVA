@@ -98,13 +98,25 @@ fut_yrs  <- c(2035, 2065)   # Mid-century projection window
 # Format axis labels as "Xk" (thousands)
 k_formatter <- function(x) paste0(comma(x / 1000), "k")
 
-# Filter a data frame to only the historical and mid-century future periods
-# Expects a numeric `year` column.
+# Filter a data frame to only the historical and mid-century future periods.
+# Accepts either a numeric `year` column or a Date/POSIXct `date` column —
+# if both are present, `year` takes precedence.
 filter_analysis_periods <- function(df) {
-  df %>% dplyr::filter(
-    (year >= hist_yrs[1] & year < hist_yrs[2]) |
-    (year >= fut_yrs[1]  & year < fut_yrs[2])
-  )
+  if ("year" %in% names(df) && is.numeric(df[["year"]])) {
+    df %>% dplyr::filter(
+      (year >= hist_yrs[1] & year < hist_yrs[2]) |
+      (year >= fut_yrs[1]  & year < fut_yrs[2])
+    )
+  } else if ("date" %in% names(df)) {
+    df %>% dplyr::mutate(.yr_temp = lubridate::year(date)) %>%
+      dplyr::filter(
+        (.yr_temp >= hist_yrs[1] & .yr_temp < hist_yrs[2]) |
+        (.yr_temp >= fut_yrs[1]  & .yr_temp < fut_yrs[2])
+      ) %>%
+      dplyr::select(-.yr_temp)
+  } else {
+    stop("filter_analysis_periods: data frame must contain either a numeric `year` column or a Date/POSIXct `date` column.")
+  }
 }
 ```
 
@@ -370,8 +382,7 @@ gc()
 
 In this segment, we retrieve and process data from the SNOTEL (Snow Telemetry) 
 network. SNOTEL stations provide critical high-elevation data, including Snow 
-Water Equivalent (SWE), essential for understanding snowmelt recharge timing 
-at Logan Pass.
+Water Equivalent (SWE, reported from SNOTEL as "wteq" variable), essential for understanding snowmelt recharge timing at Logan Pass.
 
 ```{r snotel}
 # --- 1. Retrieve SNOTEL Data ---
@@ -471,12 +482,25 @@ ggplot(snotel_annual, aes(x = water_year, y = wteq, color = name)) +
 
 ggsave("data/park/GLAC/Figs/Snotel_sites.jpg", width = 7, height = 3, dpi = 600)
 
+
+# Evaluate swe to precip ratio
+swe_summary <- snotel_annual %>%
+  dplyr::mutate(swe_frac_of_precip = wteq/prec) %>%
+  # remove outlier values > 1 at start of series
+  dplyr::filter(water_year > 1980) %>%
+  dplyr::group_by(name) %>%
+  dplyr::summarize(
+    swe_frac_of_precip = mean(swe_frac_of_precip)
+  ) %>%
+  print()
+
+ggplot(snotel_annual, aes(x = water_year, y = wteq/prec, color = name)) + geom_line() +
+geom_smooth()
+
 # --- 6. Memory Cleanup ---
 rm(snotel)
 gc()
 ```
-
-
 
 #### ----- USGS Surface Water
 
@@ -2788,6 +2812,7 @@ ggsave("data/park/GLAC/Figs/inflow_range_fig.jpg", width = 4, height = 2.5, dpi 
 # Define spatial extents for the two map panels
 fig_aoi <- st_buffer(recharge_area, 1200) %>% st_transform(4326)
 
+
 # Road network from OSM
 #roads <- opq(bbox = st_bbox(fig_aoi)) %>%
 #  add_osm_feature(key = "highway") %>%
@@ -2808,18 +2833,37 @@ tmap_mode("plot")
 site_fig <-
   # --- Watersheds (Modified Legend labels) ---
   tm_shape(
-    watersheds %>% 
-      # Append " Watershed" to each item in the name column
-      dplyr::mutate(name = paste0(name, " Watershed")), 
-    bbox = fig_aoi
-  ) +
+  watersheds %>% 
+    # Append " Watershed" to each item in the name column
+    dplyr::mutate(name = 
+                    case_when(
+                      name == "McDonald Creek" ~ "USSR",
+                      name == "Reynolds Creek" ~ "PO"
+                    )), 
+  bbox = fig_aoi
+) +
   tm_polygons(fill = "name", 
               fill.scale = tm_scale_categorical(values = c("hotpink", "#7F96AD")), 
               fill_alpha = 0.2, 
-              col = "white", 
-              lwd = 1,
+              col = "black",
+              lwd = 0,
+              lty = "dashed", # <-- Adds the black dashed outline here
               # Remove the legend title since it's now redundant
-              fill.legend = tm_legend(title = "")) + 
+              fill.legend = tm_legend(title = "")) +
+  
+   # --- Continental Divide ---
+  tm_shape(
+  watersheds %>% 
+    slice(1) %>%
+    dplyr::mutate(name ="Continental Divide"), 
+  bbox = fig_aoi
+) +
+  tm_lines( col = "name",
+            col.scale = tm_scale_categorical(values = c("black")), 
+              lwd = 1,
+              lty = "dashed", # <-- Adds the black dashed outline here
+              # Remove the legend title since it's now redundant
+              col.legend = tm_legend(title = "")) +
   
   # --- Contributing Area ---
   tm_shape(recharge_area %>% st_transform(3857) %>% dplyr::mutate(group = "Contributing Area")) +
@@ -2883,7 +2927,7 @@ tm_shape(flowlines) +
           )) + 
 
   # --- Layout and Extras ---
-  tm_basemap(server = "Esri.WorldImagery") +
+  tm_basemap(server = "Esri.WorldTopoMap") +
   tm_layout(legend.outside = FALSE, 
             legend.position = c("left", "top"),
             frame = FALSE, 
@@ -3026,6 +3070,141 @@ ggplot(logan_sd %>% dplyr::mutate(year = year(date)), aes(x = date)) +
 
 ggsave("data/park/GLAC/Figs/logan_sd.jpg", dpi = 600, width = 7, height = 3.5)
 ```
+
+
+#### Example S & D Figure
+```{r daily_use_demand_example}
+sel_year <- 2025
+plot_dat <- logan_sd %>%
+  dplyr::mutate(year = year(date)) %>%
+  dplyr::filter(year == sel_year)
+vis_dat <- logan_vis %>%
+  dplyr::filter(year(ym) == sel_year)
+inflow_dat <- wbm %>%
+  dplyr::filter(year(date) == sel_year) %>%
+  dplyr::select(date, inflow_gal, inflow_gal_low, inflow_gal_high)
+
+vis_scale_factor <- max(vis_dat$LoganVisitors, na.rm = TRUE) /
+                    max(c(plot_dat$supply_gal,
+                          plot_dat$use_gal,
+                          inflow_dat$inflow_gal_high), na.rm = TRUE) * 1.3
+
+line_colors <- c(
+  "Supply"     = pal$darkblue,
+  "Use"        = pal$pink,
+  "Inflow"     = pal$lightblue,
+  "Visitation" = pal$gold
+)
+fill_colors <- c(
+  "Inflow uncertainty" = pal$lightblue
+)
+
+# Base plot layers as a function so both main and inset share identical geometry
+build_layers <- function() {
+  list(
+    geom_ribbon(
+      data  = inflow_dat,
+      aes(x = date, ymin = inflow_gal_low, ymax = inflow_gal_high,
+          fill = "Inflow uncertainty"),
+      alpha = 0.25
+    ),
+    geom_line(
+      data = inflow_dat,
+      aes(x = date, y = inflow_gal),
+      linewidth = 1, color = "black"
+    ),
+    geom_line(
+      data = inflow_dat,
+      aes(x = date, y = inflow_gal, color = "Inflow"),
+      linewidth = 0.8
+    ),
+    geom_line(aes(y = supply_gal), color = "black", linewidth = 1.2),
+    geom_line(aes(y = supply_gal, color = "Supply"), linewidth = 0.8),
+    geom_line(aes(y = use_gal), color = "black", linewidth = 1.2),
+    geom_line(aes(y = use_gal, color = "Use"), linewidth = 0.8),
+    geom_line(
+      data = vis_dat,
+      aes(x = ym, y = LoganVisitors / vis_scale_factor),
+      color = "black", linewidth = 1
+    ),
+    geom_line(
+      data = vis_dat,
+      aes(x = ym, y = LoganVisitors / vis_scale_factor, color = "Visitation"),
+      linewidth = 0.8
+    ),
+    scale_color_manual("", values = line_colors),
+    scale_fill_manual("",  values = fill_colors)
+  )
+}
+
+# Main plot
+main_plot <- ggplot(plot_dat, aes(x = date)) +
+  build_layers() +
+  scale_y_continuous(
+    name     = "Gallons per Day",
+    labels   = function(x) paste0(scales::comma(x / 1000), "k"),
+    limits   = c(0, NA),
+    sec.axis = sec_axis(
+      transform = ~ . * vis_scale_factor,
+      name      = "Monthly Visitors",
+      labels    = function(x) paste0(scales::comma(x / 1000), "k")
+    )
+  ) +
+  scale_x_date(labels = date_format("%b"), date_breaks = "1 month") +
+  labs(x = "", title = paste("Logan Pass Water System —", sel_year)) +
+  theme_bw() +
+  theme(
+    legend.position    = "bottom",
+    legend.margin      = margin(t = -10, b = 0, l = 0, r = 0),
+    legend.key.width   = unit(1.5, "cm"),
+    axis.title.y.left  = element_text(color = "black"),
+    axis.title.y.right = element_text(color = pal$gold),
+    axis.text.y.right  = element_text(color = pal$gold),
+    plot.title         = element_text(size = 10, face = "bold")
+  )
+
+# Inset plot — zoomed, stripped of secondary axis, title, and axis labels
+inset_plot <- ggplot(plot_dat, aes(x = date)) +
+  build_layers() +
+  scale_y_continuous(
+    labels  = function(x) paste0(scales::comma(x / 1000), "k"),
+    limits  = c(0, 15000),
+    sec.axis = sec_axis(        # must declare sec_axis to avoid ggplot error,
+      transform = ~ . * vis_scale_factor,   # but we suppress its display below
+      labels    = NULL
+    )
+  ) +
+  scale_x_date(labels = date_format("%b %d"), date_breaks = "2 weeks") +
+  coord_cartesian(
+    xlim = as.Date(c(paste0(sel_year, "-08-01"),
+                     paste0(sel_year, "-09-18"))),
+    ylim = c(0, 15000)
+  ) +
+  labs(x = "", title = "") +
+  theme_bw() +
+  theme(
+    legend.position      = "none",
+    plot.title           = element_blank(),
+    axis.title           = element_blank(),
+    axis.text.x          = element_text(size = 7),
+    axis.text.y          = element_text(size = 7),
+    # suppress right axis entirely
+    axis.title.y.right   = element_blank(),
+    axis.text.y.right    = element_blank(),
+    axis.ticks.y.right   = element_blank(),
+    plot.background      = element_rect(fill = "white", color = "black", linewidth = 0.5),
+    plot.margin          = margin(4, 4, 4, 4)
+  )
+
+# Combine
+fin_plot <- main_plot + inset_element(inset_plot,
+                           left   = 0.7,
+                           bottom = 0.45,
+                           right  = 0.99,
+                           top    = 0.99)
+ggsave("data/park/GLAC/Figs/sd_inflow_example_2025.jpg", dpi = 600, width = 7, height = 3.5)
+```
+
 
 #### Use per visitor plot
 ```{r use_vs_visitor_plot}
@@ -3674,64 +3853,113 @@ ggsave(seasonal_fig, filename = "data/park/GLAC/Figs/Seasonal.tif",
 
 ##### Snowmelt Runoff
 
+Within the water balance model, runoff is generated through three mechanisms:
+
+1. Precipitation can be directly routed to runoff. For logan pass, direct
+routing is not activated (i.e., set to 0)
+
+2. Precipitation that becomes rain can enter soil storage, subtract evaporative losses, and then what's left becomes runoff for that day.
+
+3. Precipitation that becomes snow is stored in snow storage and melted through temperature modulated functions. That melt is routed to soil storage, evaporative losses are subtracted, and then it becomes runoff. 
+
+Although soil storage and evaporation functions are applied equally to both daily rain and snowmelt inputs, therefore, by calculating daily contributing proportions of rain and snowmelt, we can estimate the fraction of runoff generated by each mechanism. Here we do that where:
+
+melt_run = daily runoff produced from melt
+rain_run = daily runoff produced from rain
+melt_frac = melt_run / total_run
+rain_frac = rain_run / total_run
+total_run = melt_run + rain_run 
+
+Note, if direct precip routing = 0, total_run is equal to runoff_in_wbm. 
+
+
 ```{r figure_snowmelt}
 
 # Daily snowmelt fraction statistics (DOY × CF)
 snowmelt_stats_d <- wbm %>%
-  dplyr::filter(year(date) <= 2012 | (year(date) >= 2035 & year(date) < 2065)) %>%
+  filter_analysis_periods() %>%                          # use shared helper for consistency
   dplyr::mutate(
-    melt_run          = (melt_in_wbm / (melt_in_wbm + rain_in_wbm)) * runoff_in_wbm,
-    rain_run          = (rain_in_wbm / (melt_in_wbm + rain_in_wbm)) * runoff_in_wbm,
-    snow_frac_precip  = (precip_in_wbm - rain_in_wbm) / precip_in_wbm,
-    melt_frac         = melt_run / (melt_run + rain_run),
-    rain_frac         = rain_run / (melt_run + rain_run),
-    doy               = yday(date)
+    total_avail      = melt_in_wbm + rain_in_wbm,
+    melt_run         = if_else(total_avail > 0,
+                               (melt_in_wbm / total_avail) * runoff_in_wbm,
+                               0),                       # protect against division by zero
+    rain_run         = if_else(total_avail > 0,
+                               (rain_in_wbm / total_avail) * runoff_in_wbm,
+                               0),
+    snow_frac_precip = if_else(precip_in_wbm > 0,
+                               (precip_in_wbm - rain_in_wbm) / precip_in_wbm,
+                               0),
+    melt_frac        = if_else((melt_run + rain_run) > 0,
+                               melt_run / (melt_run + rain_run),
+                               0),
+    rain_frac        = 1 - melt_frac,
+    doy              = yday(date)
   ) %>%
+  dplyr::select(-total_avail) %>%
   dplyr::group_by(doy, CF) %>%
   dplyr::summarize(
     melt_frac_mean        = mean(melt_frac,        na.rm = TRUE),
     snow_frac_precip_mean = mean(snow_frac_precip, na.rm = TRUE),
     snowmelt              = mean(melt_in_wbm,      na.rm = TRUE),
-    runoff                = mean(runoff_gal,       na.rm = TRUE),
-    inflow                = mean(inflow_gal,       na.rm = TRUE),
+    runoff                = mean(runoff_gal,        na.rm = TRUE),
+    inflow                = mean(inflow_gal,        na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  group_by(CF) %>%
+  dplyr::group_by(CF) %>%
   dplyr::mutate(
     snowmelt_mov = data.table::frollmean(snowmelt, 5, align = "center", na.rm = TRUE),
     runoff_mov   = data.table::frollmean(runoff,   5, align = "center", na.rm = TRUE),
     inflow_mov   = data.table::frollmean(inflow,   5, align = "center", na.rm = TRUE),
-    doy_date     = as.Date(doy, origin = "2019-12-31")
+    doy_date     = as.Date(doy, origin = "2019-12-31"),
+    # Shift Oct-Dec back one year so water-year axis starts in October
+    wy_date      = if_else(month(doy_date) >= 10,
+                           doy_date %m-% years(1),
+                           doy_date)
   ) %>%
   dplyr::mutate(CF = factor(CF, levels = c("Historical", "Warm Wet", "Hot Dry"))) %>%
-  dplyr::mutate(
-    # Shift Oct-Dec back one year to force the axis to start in October
-    wy_date = if_else(month(doy_date) >= 10, 
-                      doy_date %m-% years(1), 
-                      doy_date)
-  )
+  dplyr::ungroup()
 
+# Summary: mean annual melt fraction by CF
 snowmelt_stats_summary <- snowmelt_stats_d %>%
   dplyr::group_by(CF) %>%
-  dplyr::summarize(melt_frac_mean = mean(melt_frac_mean, na.rm = TRUE))
+  dplyr::summarize(melt_frac_mean = mean(melt_frac_mean, na.rm = TRUE),
+                   .groups = "drop")
 
-peak_melt   <- snowmelt_stats_d %>% group_by(CF) %>% slice_max(snowmelt_mov)
-peak_runoff <- snowmelt_stats_d %>% group_by(CF) %>% slice_max(runoff_mov)
+# Peak timing by CF
+peak_melt   <- snowmelt_stats_d %>% dplyr::group_by(CF) %>% slice_max(snowmelt_mov)
+peak_runoff <- snowmelt_stats_d %>% dplyr::group_by(CF) %>% slice_max(runoff_mov)
 
 # Annual melt fraction time series
-pdat_sm <- wbm_annual %>%
-  ungroup() %>%
+snowmelt_stats_annual <- wbm_annual %>%
+  dplyr::ungroup() %>%
   dplyr::mutate(
-    melt_run         = (melt_in_wbm / (melt_in_wbm + rain_in_wbm)) * runoff_in_wbm,
-    rain_run         = (rain_in_wbm / (melt_in_wbm + rain_in_wbm)) * runoff_in_wbm,
-    snow_frac_precip = (precip_in_wbm - rain_in_wbm) / precip_in_wbm,
-    melt_frac        = melt_run / (melt_run + rain_run),
-    rain_frac        = rain_run / (melt_run + rain_run),
+    total_avail      = melt_in_wbm + rain_in_wbm,
+    melt_run         = if_else(total_avail > 0,
+                               (melt_in_wbm / total_avail) * runoff_in_wbm,
+                               0),
+    rain_run         = if_else(total_avail > 0,
+                               (rain_in_wbm / total_avail) * runoff_in_wbm,
+                               0),
+    snow_frac_precip = if_else(precip_in_wbm > 0,
+                               (precip_in_wbm - rain_in_wbm) / precip_in_wbm,
+                               0),
+    melt_frac        = if_else((melt_run + rain_run) > 0,
+                               melt_run / (melt_run + rain_run),
+                               0),
+    rain_frac        = 1 - melt_frac,
     CF               = factor(CF, levels = c("Historical", "Warm Wet", "Hot Dry"))
-  ) 
+  ) %>%
+  dplyr::select(-total_avail)
+
+# Summary over analysis periods — uses shared helper for consistency
+snowmelt_stats_annual %>%
+  filter_analysis_periods() %>%
+  dplyr::group_by(CF) %>%
+  dplyr::summarize(melt_frac_mean = mean(melt_frac, na.rm = TRUE),
+                   .groups = "drop")
 
 # Top figure - snowmelt fraction of runoff through time
-sm_fraction_fig <- ggplot(pdat_sm) +
+sm_fraction_fig <- ggplot(snowmelt_stats_annual) +
   geom_rect(aes(xmin = 2035, xmax = 2065, ymin = -Inf, ymax = Inf),
             fill = "lightgrey", alpha = 0.1) +
   geom_line(aes(x = year, y = melt_frac, group = CF), color = "black", lwd = 2, lineend = "round") +
@@ -3805,7 +4033,8 @@ drought <- ggplot(spei, aes(x = ym, y = spei)) +
   geom_text(aes(x = as.Date("1980-01-01"), y = -1.5, label = "Severe Drought"),
             hjust = 0.25, vjust = 1.1, check_overlap = TRUE, color = "red2",   size = 3) +
   geom_text(aes(x = as.Date("1980-01-01"), y = -2,   label = "Extreme Drought"),
-            hjust = 0.25, vjust = 1.1, check_overlap = TRUE, color = "darkred", size = 3)
+            hjust = 0.25, vjust = 1.1, check_overlap = TRUE, color = "darkred", size = 3) +
+  geom_vline(xintercept = as.Date("2024-01-01"))
 
 drought
 
@@ -4142,4 +4371,20 @@ This section is commented out because the final saved workflow uses an aggregate
 
 ```{r save_workspace}
 save.image(file = "data/park/GLAC/GLAC_data.RData")
+```
+
+
+```{r test_pm}
+
+# --- Load Future Climate Data (MACA GCMs) ---
+# Download took >1 hr; load from disk.
+test_clim <- get_climate_future(
+   sf = recharge_area %>% dplyr::mutate(name = "recharge_area"),
+   col_name = "name", start = "2025-01-01", end = "2025-12-31",
+   GCM = all_cfs$GCM[1], exact = TRUE, gridmet_points = clim_pts,
+   vars = c("tasmin", "tasmax", "pr", "uas", "vas")
+ ) 
+  
+
+
 ```
