@@ -2246,8 +2246,8 @@ We estimate water use based on visitation with low, mid, and high per-visitor us
 ```{r water_use}
 # Per-visitor water demand assumptions (gallons/visitor)
 low_use_per_visitor  <- 0.20  # Low range (Hughes, 1996)
-mid_use_per_visitor  <- 0.36  # Mid range
-high_use_per_visitor <- 0.54  # High range
+mid_use_per_visitor  <- 0.37  # Mid range
+high_use_per_visitor <- 0.48  # High range
 
 # --- Monthly Use Estimates ---
 monthly_use <- monthly_visitors %>%
@@ -2305,6 +2305,35 @@ monthly_use_proportions <- monthly_use %>%
     month_date = as_date(paste0("2000-", month, "-01")),
     fraction   = mid_use_hist / sum(mid_use_hist)
   )
+
+# Some use stats for the report
+
+use_2025 <- annual_use %>%
+  dplyr::filter(year == 2025)
+
+use_2050 <- annual_use %>%
+  dplyr::filter(year == 2050)
+
+monthly_use_2025 <- monthly_use %>%
+  dplyr::filter(month(ym) == 7,
+                year(ym) == 2025)
+
+monthly_use_2050 <- monthly_use %>%
+  dplyr::filter(month(ym) == 7,
+                year(ym) == 2050)
+
+print(paste0("2050 use ranges from ", floor(use_2050$low_use), 
+             " to ", floor(use_2050$high_use), " gallons with a mean of ",
+             floor(use_2050$mid_use), " gallons representing a ",
+      floor(100* (use_2050$mid_use - use_2025$actual_use)/use_2025$actual_use), 
+      "% increase from observed 2025 use of ", use_2025$actual_use, "."))
+
+print(paste0("July use increases from the 2025 rate of ", floor(monthly_use_2025$use_gal), " gallons to ", floor(monthly_use_2050$monthly_use_mid), 
+      " gallons in 2050, an increase of ", 
+      floor(100* (monthly_use_2050$monthly_use_mid - monthly_use_2025$use_gal)/monthly_use_2025$use_gal), "%."))
+
+
+
 ```
 
 ```{r obs_and_mod_use_plot}
