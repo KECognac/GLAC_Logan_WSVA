@@ -15,6 +15,7 @@ packageLoad <-
 # vector of packages to load
 packages <- c(
   "akima",
+  "ambient",
   "arcgisutils",
   "arrow",
   "broom",
@@ -48,6 +49,7 @@ packages <- c(
   "knitr",
   "leafem",
   "leaflet",
+  "leafsync",
   "lwgeom",
   "maptiles",
   "mapview",
