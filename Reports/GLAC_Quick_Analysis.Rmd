@@ -2245,7 +2245,7 @@ We estimate water use based on visitation with low, mid, and high per-visitor us
 
 ```{r water_use}
 # Per-visitor water demand assumptions (gallons/visitor)
-low_use_per_visitor  <- 0.20  # Low range (Hughes, 1996)
+low_use_per_visitor  <- 0.19  # Low range (Hughes, 1996)
 mid_use_per_visitor  <- 0.37  # Mid range
 high_use_per_visitor <- 0.48  # High range
 
@@ -3608,11 +3608,14 @@ use_monthly_fig <- ggplot(monthly_use_proportions) +
   geom_ribbon(aes(x = month_date, ymin = low_use_fut, ymax = high_use_fut, fill = "Projected"), alpha = 0.4) +
   geom_line(aes(x = month_date, y = mid_use_fut), color = "black", lwd = 1.5, lineend = "round") +
   geom_line(aes(x = month_date, y = mid_use_fut, color = "Projected"), lwd = 1, lineend = "round") +
+  geom_line(data = use_2025, aes(x = month_date, y = use_gal, color = "Recorded 2025"), lwd = 1, linetype = "dashed") +
   theme_bw() +
-  scale_color_manual("", values = c("Historical" = pal$darkblue, "Projected" = pal$pink)) +
+  scale_color_manual("", values = c("Projected" = pal$pink, 
+                                    "Historical" = pal$darkblue,
+                                    "Recorded 2025" = "black")) +
   scale_fill_manual("",  values = c("Historical" = pal$darkblue, "Projected" = pal$pink)) +
   scale_y_continuous(labels = scales::label_number(scale = 1e-3, suffix = "K")) +
-  labs(x = "", y = "Monthly Use (gallons)") +
+  labs(x = "", y = "Monthly Use (gal)") +
   scale_x_date(labels = date_format("%b")) +
   theme_legend_bottom
 
@@ -3624,12 +3627,14 @@ use_annual_fig <- ggplot(annual_use %>% dplyr::filter(year > 1997)) +
   geom_line(aes(x = year, y = mid_use, color = c_group), lwd = 1, lineend = "round") +
   theme_bw() +
   scale_y_continuous(labels = scales::label_number(scale = 1e-6, suffix = "M")) +
-  scale_color_manual("", values = c("Projected" = pal$pink, "Historical" = pal$darkblue)) +
+  scale_color_manual("", values = c("Projected" = pal$pink, 
+                                    "Historical" = pal$darkblue,
+                                    "Recorded 2025" = "black")) +
   scale_fill_manual("",  values = c("Projected" = pal$pink, "Historical" = pal$darkblue)) +
   labs(x = "", y = "Annual Use (gal)") +
   annotate("label",
            x = -Inf, y = Inf,
-           label = paste0("Low = ",  round(low_use_per_visitor, 1),  " gal/visitor\n",
+           label = paste0("Low = ",  round(low_use_per_visitor, 2),  " gal/visitor\n",
                           "Mid = ",  round(mid_use_per_visitor, 2),  " gal/visitor\n",
                           "High = ", round(high_use_per_visitor, 2), " gal/visitor"),
            hjust = -0.07, vjust = 1.1, label.size = 0, fill = "white", size = 3) +
