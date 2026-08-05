@@ -39,7 +39,7 @@ packages <- c(
   # "ggseas",
   "ggthemes",
   "glue",
-  "grDevices"
+  "grDevices",
   "gridExtra",
   "here",
   "httr",
