@@ -78,7 +78,7 @@ packages <- c(
   "trend",
   "units",
   "viridis",
-  "whitebox"
+  "whitebox",
   "xml2",
   "zoo"
 )
