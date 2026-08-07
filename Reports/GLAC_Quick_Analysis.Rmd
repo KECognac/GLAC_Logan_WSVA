@@ -837,6 +837,12 @@ In this section, we acquire the high-resolution climate datasets necessary for d
 clim_hist        <- readRDS("data/park/GLAC/clim_hist.rds")
 aoi_gridmet_grid <- readRDS("data/park/GLAC/aoi_gridmet_grid.rds")
 
+# Extract unique grid center points with area weights
+clim_pts <- clim_hist %>%
+  group_by(x, y, area_weight) %>%
+  summarize() %>%
+  st_as_sf(coords = c("x", "y"), crs = 4326, remove = FALSE)
+
 # --- Load Future Climate Data (MACA GCMs) ---
 # Download took >1 hr; load from disk.
 #clim_fut <- get_climate_future(
@@ -859,11 +865,7 @@ clim_hist <- clim_hist %>%
 clim_fut <- clim_fut %>%
   dplyr::filter(x <= -113.72 & x > -113.72 - 0.04)
 
-# Extract unique grid center points with area weights
-clim_pts <- clim_hist %>%
-  group_by(x, y, area_weight) %>%
-  summarize() %>%
-  st_as_sf(coords = c("x", "y"), crs = 4326, remove = FALSE)
+
 
 # --- 4. Spatial Verification ---
 mapview(aoi_gridmet_grid,
