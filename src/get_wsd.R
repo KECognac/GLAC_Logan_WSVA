@@ -64,7 +64,20 @@ get_wsd <- function(conus = TRUE,
     } else {
       parks <- getParkSystem()
       
+      WSD_raw <- WSD_raw %>% 
+        dplyr::mutate(
+          coords_flag = ifelse(is.na(source_longitude) | is.na(source_latitude),
+                               "Centroid", "Source Coordinates"))
+
+      # filter missing coords to only join those (fixes GRSA issue)
+      WSD_missing <- WSD_raw %>% 
+        filter(coords_flag == "Centroid")
+      
+      # get associated park centroid and join
       park_centroids <- parks %>% 
+        filter(UNIT_CODE %in% WSD_missing$park_unit) %>% 
+        group_by(UNIT_CODE) %>%
+        summarize() %>%
         sf::st_centroid() %>% 
         sf::st_transform(4326) %>% 
         dplyr::mutate(
@@ -74,15 +87,19 @@ get_wsd <- function(conus = TRUE,
         sf::st_drop_geometry() %>%
         dplyr::select(UNIT_CODE, x_cent, y_cent)
       
-      WSD_raw <- WSD_raw %>%
+      WSD_missing <- WSD_missing %>%
         dplyr::left_join(park_centroids, by = c("park_unit" = "UNIT_CODE")) %>% 
         dplyr::mutate(
-          coords_flag = ifelse(is.na(source_longitude) | is.na(source_latitude),
-                               "Centroid", "Source Coordinates"),
           source_longitude = ifelse(is.na(source_longitude), x_cent, source_longitude),
           source_latitude = ifelse(is.na(source_latitude), y_cent, source_latitude)
         ) %>%
         dplyr::select(-x_cent, -y_cent)
+      
+      # join to rows that had coords
+      WSD_raw <- WSD_raw %>%
+        filter(coords_flag == "Source Coordinates") %>% 
+        bind_rows(WSD_missing)
+       
     }
   }
   
