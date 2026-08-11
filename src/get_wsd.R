@@ -76,6 +76,8 @@ get_wsd <- function(conus = TRUE,
       # get associated park centroid and join
       park_centroids <- parks %>% 
         filter(UNIT_CODE %in% WSD_missing$park_unit) %>% 
+        group_by(UNIT_CODE) %>%
+        summarize() %>%
         sf::st_centroid() %>% 
         sf::st_transform(4326) %>% 
         dplyr::mutate(
