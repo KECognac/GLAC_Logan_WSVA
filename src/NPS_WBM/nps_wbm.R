@@ -57,6 +57,7 @@
 #' @param Soil.Init Numeric initial soil water content [mm]. Default `0`.
 #' @param Shade.Coeff Numeric shading coefficient used by Oudin PET variant.
 #'   Default `1`.
+#' @param ROS if TRUE, Rain on snow melt function (get_melt_ros) applied instead of get_melt()
 #' @param T.Base Numeric base temperature for growing degree days [°C]. Default `0`.
 #'
 #' @references
@@ -84,6 +85,7 @@ nps_wbm <- function(DailyWB,
                     Snowpack.Init = 0,   # according to Mike's code
                     Soil.Init = 0, # Soil.Init is full (1) from Mike's code, but empty (0) in Amber's
                     Shade.Coeff = 1,
+                    ROS = FALSE,
                     T.Base = 0) {
   
   DailyWB$doy <- yday(DailyWB$date)
@@ -92,7 +94,11 @@ nps_wbm <- function(DailyWB,
   DailyWB$F <- get_freeze(DailyWB$jtemp, DailyWB$tmean_C)
   DailyWB$RAIN <- get_rain(DailyWB$ppt_mm, DailyWB$F)
   DailyWB$SNOW <- get_snow(DailyWB$ppt_mm, DailyWB$F)
-  DailyWB$MELT <- get_melt(DailyWB$tmean_C, DailyWB$jtemp, hock=hock_coef, DailyWB$SNOW, Snowpack.Init)
+  if(ROS == FALSE) {
+    DailyWB$MELT <- get_melt(DailyWB$tmean_C, DailyWB$jtemp, hock=hock_coef, DailyWB$SNOW, Snowpack.Init)
+  } else if (ROS == TRUE) {
+    DailyWB$MELT <- get_melt_ros(DailyWB$tmean_C, DailyWB$jtemp, hock=hock_coef, DailyWB$SNOW, DailyWB$RAIN, Snowpack.Init)
+  }
   DailyWB$PACK <-  get_snowpack(DailyWB$jtemp, DailyWB$SNOW, DailyWB$MELT)
   DailyWB$DIRECT <- DailyWB$RAIN * Direct_Frac # CSU ADD
   #DailyWB$W = DailyWB$MELT + DailyWB$RAIN
