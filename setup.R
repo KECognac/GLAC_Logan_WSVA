@@ -39,6 +39,7 @@ packages <- c(
   # "ggseas",
   "ggthemes",
   "glue",
+  "grDevices",
   "gridExtra",
   "here",
   "httr",
@@ -77,6 +78,7 @@ packages <- c(
   "trend",
   "units",
   "viridis",
+  "whitebox",
   "xml2",
   "zoo"
 )
