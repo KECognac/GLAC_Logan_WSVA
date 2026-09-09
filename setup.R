@@ -69,10 +69,12 @@ packages <- c(
   "rvest",
   "scales",
   "sf",
+  "shinytest2",   # test-only: browser-driven tests for rapid_app/ (see rapid_app/tests/)
   "soilDB",
   "SPEI",
   "stars",
   "terra",
+  "testthat",     # test-only: unit / server tests for rapid_app/ (see rapid_app/tests/)
   "tigris",
   "tmap",
   "trend",
