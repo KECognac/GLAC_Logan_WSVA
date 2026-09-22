@@ -145,12 +145,31 @@ run_NPS_WBM_points <- function(points,
         Snowpack.Init <- points_params[i,]$final_snowpack
       }
       
-      # Subset DailYWB for select GCM and Point
+      # Subset DailyWB for select GCM and Point.
+      # NOTE: match on rounded coordinates (not exact float equality) because
+      # climate_data (e.g. clim_hist/clim_fut) can come from separate API pulls
+      # whose x/y values differ by tiny floating-point noise at the same
+      # nominal GridMET cell -- exact `==` matching can silently return 0 rows
+      # for a valid point/GCM combination (this is what caused the
+      # 'replacement has length zero' error inside get_melt()/get_melt_ros(),
+      # since an empty DailyWB makes length(tmean) == 0 and the internal
+      # `for(i in 2:length(tmean))` loop wraps around to i = 0).
       DailyWB <- climate_data %>%
         data.table::data.table() %>%
-        dplyr::filter(x == points_params[i,x],
-                      y == points_params[i,y],
-                      GCM == all_gcms[j]) 
+        dplyr::filter(round(x, 6) == round(points_params[i,x], 6),
+                      round(y, 6) == round(points_params[i,y], 6),
+                      GCM == all_gcms[j])
+
+      if (nrow(DailyWB) == 0) {
+        stop(sprintf(
+          paste0("run_NPS_WBM_points: no climate_data rows found for point %d ",
+                 "(x = %s, y = %s) and GCM = '%s'. This usually means climate_data ",
+                 "is missing that point/GCM combination (e.g. a partial download), ",
+                 "or the coordinates differ by more than 6 decimal degrees. Compare ",
+                 "distinct x/y for this GCM in climate_data against points_params."),
+          i, points_params[i, x], points_params[i, y], all_gcms[j]
+        ))
+      }
       
       # Run water balance model for each point
       DailyWB_pts[[i]] <- nps_wbm(DailyWB = DailyWB,
