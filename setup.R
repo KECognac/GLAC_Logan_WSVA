@@ -36,6 +36,7 @@ packages <- c(
   "ggfortify",
   "ggpubr",
   "ggrepel",
+  "ggspatial",
   # "ggseas",
   "ggthemes",
   "glue",
