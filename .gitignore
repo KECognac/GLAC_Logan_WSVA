@@ -48,3 +48,9 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+.positai
+
+# Local files
+data
+data/
+Reports/*.docx
