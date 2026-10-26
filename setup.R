@@ -59,6 +59,7 @@ packages <- c(
   "ncdf4",
   "nhdplusTools",
   "nngeo",
+  "osmdata",
   "padr",
   "patchwork",
   "plotly",
