@@ -1,0 +1,158 @@
+---
+title: "3D_map"
+author: "KEC"
+date: "2026-10-23"
+output: html_document
+---
+
+```{r knitr_defaults, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown builds 3D views of Glacier's Logan Pass area from the 
+elevatr DEM and `render_map_3d()` (`src/map_3d.R`).
+
+Rendering uses {rayshader}. On macOS, {rgl} and {rayrender} need XQuartz
+(<https://www.xquartz.org>) to load, even when no window is opened.
+
+```{r setup}
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+
+# Render off-screen (set before rayshader loads)
+options(rgl.useNULL = TRUE)
+source("setup.R")
+library(rayshader)
+
+```
+
+# 1. AOI and layers
+
+Any sf objects in any CRS. Each layer gets a legend name, a style, and
+optionally a callout box (position as a fraction of the image from the top
+left).
+
+```{r test}
+
+contributing_area <- readRDS("data/park/GLAC/report_data/lidar_watershed.rds")
+
+wsd <- readRDS("data/park/GLAC/report_data/water_supply_database.rds") %>%
+  dplyr::filter(park_unit == "GLAC", grepl("Logan", water_system_name))
+
+# Streams (NHDPlus), with Logan Creek as its own layer so it gets a callout
+flowlines <- readRDS("data/park/GLAC/report_data/nhdplus_flowlines.rds")
+logan_creek <- dplyr::filter(flowlines, gnis_name == "Logan Creek")
+other_streams <- dplyr::filter(flowlines, gnis_name != "Logan Creek" | is.na(gnis_name))
+
+# Park buildings (NPS footprints), drawn as markers at their centroids
+buildings <- readRDS("data/park/GLAC/report_data/buildings.rds")
+visitor_center <- dplyr::filter(buildings, grepl("Logan Pass .*Visitor Center", BLDGNAME))
+chlorinator <- dplyr::filter(buildings, grepl("Logan Pass .*Chlorinator", BLDGNAME))
+
+# Continental Divide, traced as the shared boundary between the Pacific-side
+# (HUC 17) and Hudson Bay-side (HUC 09) HUC12 watersheds. The national divide
+# line in report_data is too coarse at this scale (~500 m off the ridge here).
+huc12 <- readRDS("data/park/GLAC/report_data/site_fig_huc12.rds") %>%
+  sf::st_transform(26912)
+pacific_side <- sf::st_union(dplyr::filter(huc12, substr(huc12, 1, 2) == "17"))
+other_side <- sf::st_union(dplyr::filter(huc12, substr(huc12, 1, 2) != "17"))
+# The two sides' boundaries don't share every vertex, so keep the Pacific-side
+# boundary wherever it is within 5 m of the other side
+continental_divide <- sf::st_boundary(pacific_side) %>%
+  sf::st_intersection(sf::st_buffer(other_side, 5)) %>%
+  sf::st_sf(geometry = .)
+
+# Roads from OpenStreetMap, cached so Overpass is only queried once. Overpass
+# servers are often busy (HTTP 429/502), so this retries and tries mirrors.
+roads_path <- "data/park/GLAC/report_data/osm_roads_logan_pass.rds"
+if (!file.exists(roads_path)) {
+  bb <- contributing_area %>%
+    sf::st_buffer(1500) %>%
+    sf::st_transform(4326) %>%
+    sf::st_bbox()
+  osm_roads <- NULL
+  for (attempt in 1:3) {
+    for (url in c("https://overpass-api.de/api/interpreter",
+                  "https://overpass.kumi.systems/api/interpreter")) {
+      osm_roads <- tryCatch({
+        osmdata::set_overpass_url(url)
+        osmdata::opq(bbox = as.numeric(bb), timeout = 120) %>%
+          osmdata::add_osm_feature(key = "highway") %>%
+          osmdata::osmdata_sf() %>%
+          purrr::pluck("osm_lines") %>%
+          dplyr::select(osm_id, name, highway)
+      }, error = function(e) NULL)
+      if (!is.null(osm_roads)) break
+    }
+    if (!is.null(osm_roads)) break
+    Sys.sleep(30)
+  }
+  if (is.null(osm_roads)) stop("Could not download OSM roads; try again later.")
+  saveRDS(osm_roads, roads_path)
+}
+roads <- readRDS(roads_path) %>%
+  dplyr::filter(highway %in% c("primary", "secondary", "tertiary"))
+
+
+
+```
+
+
+```{r 3dmap}
+
+# Drawn in this order (later layers on top)
+layers <- list(
+  map3d_layer(other_streams, "Streams", "line", color = "#9fd3ff", width = 8),
+  map3d_layer(logan_creek, "Logan Creek", "line", color = "#9fd3ff", width = 8,
+              legend = FALSE),
+  map3d_layer(roads, "Roads", "line", color = "gray90", width = 8,
+              callout = map3d_callout("Going-to-the-Sun Road", 0.85, 0.35)),
+  map3d_layer(contributing_area, "Contributing Area", "fill", color = "hotpink"),
+  map3d_layer(continental_divide, "Continental Divide", "line", color = "gray10", width = 8,
+              casing = "white", lty = "dashed",
+              callout = map3d_callout("Continental\nDivide", 0.10, 0.36, aim_x = 0.25, aim_y = 0.50)),
+  map3d_layer(wsd, "Infiltration Gallery", "point", color = "navy", size_m = 35,
+              callout = map3d_callout("Logan Creek\nInfiltration Gallery", 0.60, 0.15)),
+  map3d_layer(chlorinator, "Water Treatment", "square", color = "#1f78b4", size_m = 35,
+              callout = map3d_callout("Water Treatment", 0.25, 0.25)),
+  map3d_layer(visitor_center, "Visitor Center", "point", color = "#ffd400", size_m = 35,
+              outline = "gray15", callout = map3d_callout("Visitor Center", 0.85, 0.6))
+)
+
+
+
+
+# Camera on the east side: the model's east edge is in front, running south
+# (left) to north (right), so the scale bar goes along it
+views <- list(basin = map3d_view(from = "SE", 
+                                 phi = 50,
+                                 zoom = .8,
+                                 north_arrow = c(0.15, 0.80),
+                                 scalebar = list(km = 1, 
+                                                 edge = "E", 
+                                                 start = 0,
+                                                 inset = 0)))
+
+render_map_3d(
+  aoi = contributing_area,
+  layers = layers,
+  views = views,
+  dem = "data/park/GLAC/Lidar/lidar_DTM_site_fig_3m.tif",
+  buffer_m = 1000,
+  z_exag = .5,
+  drape = "imagery",
+  notes = paste("Elevation: USGS 3D Elevation Program 1 m lidar, resampled to 3 m.",
+                "Streams: NHDPlus. Continental Divide: USGS Watershed Boundary Dataset (HUC12).",
+                "Buildings: NPS. Roads: OpenStreetMap contributors.",
+                "Imagery: Esri World Imagery."),
+  #preview = TRUE
+  preview = FALSE, out_dir = "data/park/GLAC/Figs", prefix = "logan_pass_3d"
+)
+
+
+
+```
+
