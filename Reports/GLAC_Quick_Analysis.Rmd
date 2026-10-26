@@ -89,11 +89,59 @@ theme_legend_bottom <- theme(
 gal_to_cf <- 0.1336805
 cf_to_gal <- 1 / gal_to_cf
 
-# Define analysis windows for comparison
-hist_yrs <- c(1979, 2012)   # Historical reference period
-fut_yrs  <- c(2035, 2065)   # Mid-century projection window
+# Analysis windows used by every chunk (inclusive). The WBM is run from 1979,
+# which is a spin-up year and is excluded from all statistics.
+hist_yrs <- c(1980, 2012)   # Historical baseline period
+fut_yrs  <- c(2035, 2064)   # Mid-century future period (30 years)
+
+in_hist   <- function(yr) yr >= hist_yrs[1] & yr <= hist_yrs[2]
+in_fut    <- function(yr) yr >= fut_yrs[1]  & yr <= fut_yrs[2]
+in_window <- function(yr) in_hist(yr) | in_fut(yr)
 
 # --- 7. Utility Functions ---
+
+# Downloaded inputs are saved here the first time they are pulled, so later
+# runs read the saved copy instead of re-downloading. Set refresh = TRUE in a
+# call (or delete the file) to pull a fresh copy.
+report_data_dir <- "data/park/GLAC/report_data"
+tables_dir      <- "data/park/GLAC/tables"
+dir.create(report_data_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(tables_dir,      recursive = TRUE, showWarnings = FALSE)
+
+# Helper: download once, then reuse the saved copy.
+# Rasters are saved as GeoTIFFs; everything else as .rds.
+cache_download <- function(name, expr, refresh = FALSE) {
+  rds_path <- file.path(report_data_dir, paste0(name, ".rds"))
+  tif_path <- file.path(report_data_dir, paste0(name, ".tif"))
+  if (!refresh && file.exists(tif_path)) return(terra::rast(tif_path))
+  if (!refresh && file.exists(rds_path)) return(readRDS(rds_path))
+  out <- expr
+  # Don't save failed or empty downloads, so the next run tries again
+  if (is.null(out) || (is.atomic(out) && all(is.na(out))) ||
+      (is.data.frame(out) && nrow(out) == 0)) {
+    warning("cache_download('", name, "'): download returned no data; not saved")
+    return(out)
+  }
+  if (inherits(out, "RasterLayer")) out <- terra::rast(out)
+  if (inherits(out, "SpatRaster")) {
+    terra::writeRaster(out, tif_path, overwrite = TRUE)
+    return(terra::rast(tif_path))
+  }
+  saveRDS(out, rds_path)
+  out
+}
+
+# Helper: save a tabulated output as a CSV in the tables directory.
+save_table <- function(df, name) {
+  out <- as.data.frame(df)
+  # Keep row names (e.g., transposed summary tables) as a first column
+  if (!identical(rownames(out), as.character(seq_len(nrow(out))))) {
+    out <- tibble::rownames_to_column(out, "row")
+  }
+  readr::write_csv(out, file.path(tables_dir, paste0(name, ".csv")))
+  invisible(df)
+}
+
 
 # Format axis labels as "Xk" (thousands)
 k_formatter <- function(x) paste0(comma(x / 1000), "k")
@@ -104,14 +152,12 @@ k_formatter <- function(x) paste0(comma(x / 1000), "k")
 filter_analysis_periods <- function(df) {
   if ("year" %in% names(df) && is.numeric(df[["year"]])) {
     df %>% dplyr::filter(
-      (year >= hist_yrs[1] & year < hist_yrs[2]) |
-      (year >= fut_yrs[1]  & year < fut_yrs[2])
+      in_window(year)
     )
   } else if ("date" %in% names(df)) {
     df %>% dplyr::mutate(.yr_temp = lubridate::year(date)) %>%
       dplyr::filter(
-        (.yr_temp >= hist_yrs[1] & .yr_temp < hist_yrs[2]) |
-        (.yr_temp >= fut_yrs[1]  & .yr_temp < fut_yrs[2])
+        in_window(.yr_temp)
       ) %>%
       dplyr::select(-.yr_temp)
   } else {
@@ -135,17 +181,54 @@ park <- "GLAC"
 
 # --- 2. Retrieve Administrative Boundaries ---
 # Fetch park geometry and metadata from the NPS IRMA DataStore
-park_boundary <- getParkBoundary(park = park)
+park_boundary <- cache_download("park_boundary", getParkBoundary(park = park))
 state         <- park_boundary$STATE
 
 # --- 3. Infrastructure and Hydrology ---
 # Retrieve building footprints intersecting the park boundary
-buildings <- getBuildings(park_boundary, dist = 0)
+buildings <- cache_download("buildings", getBuildings(park_boundary, dist = 0))
 
-# Load the manually delineated recharge area.
-# Note: This KML represents the specific contributing area for
-# the Logan Pass infiltration gallery system.
-recharge_area <- st_read("data/park/GLAC/logan_contrib_area.kml") %>%
+# Delineate the recharge (contributing) area for the Logan Pass infiltration
+# gallery from the USGS 3DEP 1 m lidar DTM (Montana Statewide Phase 2, 2020,
+# with gaps filled from Phase 3, 2021) using whitebox, as done at MORA.
+logan_infil <- st_read("data/park/GLAC/logan_infil.shp", quiet = TRUE) %>%
+  st_zm()
+
+# Read only a clipped window of the cloud-optimized lidar tiles: the gallery
+# plus 1.5 km, which covers the full catchment up to the Garden Wall ridge
+lidar_dir <- "data/park/GLAC/Lidar"
+lidar_dem_path <- file.path(lidar_dir, "lidar_DTM_logan_pass.tif")
+lidar_base <- "/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1m/Projects/"
+lidar_tiles <- c(
+  "MT_Statewide_Phase2_2020_B20/TIFF/USGS_1M_12_x29y540_MT_Statewide_Phase2_2020_B20.tif",
+  "MT_Statewide_Phase2_2020_B20/TIFF/USGS_1M_12_x30y540_MT_Statewide_Phase2_2020_B20.tif",
+  "MT_Statewide_Phase3_2021_B21/TIFF/USGS_1M_12_x29y540_MT_Statewide_Phase3_2021_B21.tif",
+  "MT_Statewide_Phase3_2021_B21/TIFF/USGS_1M_12_x30y540_MT_Statewide_Phase3_2021_B21.tif")
+if (!file.exists(lidar_dem_path)) {
+  lidar_window <- logan_infil %>% st_transform(26912) %>% st_buffer(1500) %>% vect()
+  # merge() gives earlier rasters priority, so 2020 is primary and 2021 fills gaps
+  lidar_dem <- purrr::map(lidar_tiles, ~ crop(rast(paste0(lidar_base, .x)), lidar_window)) %>%
+    unname() %>%
+    do.call(merge, .)
+  # Plain DEFLATE: whitebox can't read floating-point predictor compression
+  writeRaster(lidar_dem, lidar_dem_path, gdal = "COMPRESS=DEFLATE", overwrite = TRUE)
+}
+
+# Whitebox writes its intermediates to disk, so use an absolute output path.
+# auto_snap moves the gallery point onto the main flow line (~10 m away)
+# so the chunk knits without the interactive click used at MORA.
+dir.create(file.path(lidar_dir, "whitebox"), showWarnings = FALSE)
+recharge_area <- cache_download("lidar_watershed", delineate_watershed(
+  dem              = rast(lidar_dem_path),
+  pour_point       = logan_infil,
+  output_dir       = normalizePath(file.path(lidar_dir, "whitebox")),
+  file_prefix      = "logan_gallery",
+  breach_dist      = 10,
+  snap_buffer_dist = 10,
+  interactive_snap = FALSE,
+  auto_snap        = TRUE,
+  write_gpkg       = TRUE,
+  crs_out          = "EPSG:26912")) %>%  # native lidar CRS, avoids resampling
   st_transform(crs = st_crs(park_boundary))
 
 # --- 4. Logan Pass Supply and Demand Data ---
@@ -156,12 +239,13 @@ logan_sd <- read_csv("data/park/GLAC/logan_pass_supply_demand.csv") %>%
     supply_gal = as.numeric(supply_gal),
     use_gal    = as.numeric(use_gal)
   ) %>%
-  # A handful of days have recorded use ~10x the surrounding days, exceeding
-  # tank capacity. These are attributed to data-entry errors (confirmed against
-  # the original spreadsheet) and are corrected by dividing by 10.
+  # Three days have recorded use ~10x the surrounding days (40,000-75,000 gal),
+  # far beyond what the 10,000-gal tank and 4-8 gpm gallery can deliver. These
+  # are attributed to data-entry errors (an extra digit) and are corrected by
+  # dividing by 10. Days of 10,000-12,500 gal are plausible (the 2009 EA reports
+  # peaks up to 12,000 gpd) and are kept.
   dplyr::mutate(
-    use_gal = ifelse(use_gal > quantile(use_gal, 0.99, na.rm = TRUE),
-                     use_gal / 10, use_gal)
+    use_gal = ifelse(use_gal > 20000, use_gal / 10, use_gal)
   )
 
 # Monthly aggregation
@@ -203,7 +287,7 @@ The database contains a row for each water supply system and source of water
 ```{r water_supply_db}
 
 # Import database and convert to spatial (sf) object
-WSD <- get_wsd() %>%
+WSD <- cache_download("water_supply_database", get_wsd()) %>%
   dplyr::filter(park_unit == park)
 
 # --- 2. Target Site Selection ---
@@ -217,7 +301,8 @@ select_sources <- select_sources %>%
   dplyr::mutate(
     watershed = purrr::map(
       .x = 1:nrow(.),
-      .f = ~ getXYWatersheds(sf = select_sources[.x, ], coordinates = NULL, snap = TRUE)
+      .f = ~ cache_download(paste0("auto_watershed_", .x),
+                            getXYWatersheds(sf = select_sources[.x, ], coordinates = NULL, snap = TRUE))
     )
   )
 
@@ -241,7 +326,7 @@ mapview(park_boundary,
 
 # --- 5. Spatial Visualization: Logan Pass Focus ---
 # Filter buildings within 1 km of the selected sources
-sel_bldg <- getBuildings(park_boundary) %>%
+sel_bldg <- cache_download("buildings_buffer", getBuildings(park_boundary)) %>%
   st_filter(st_buffer(st_transform(select_sources, st_crs(buildings)), 1000))
 
 #mapview(select_sources$watershed,
@@ -255,7 +340,7 @@ sel_bldg <- getBuildings(park_boundary) %>%
           alpha.regions = 0.1,
           col.regions  = "navy",
           lwd          = 2,
-          layer.name   = "Manually-Delineated Rch. Area") +
+          layer.name   = "Lidar-Delineated Rch. Area") +
   mapview(select_sources,
           col.regions  = "yellow",
           alpha.regions = 1,
@@ -280,7 +365,7 @@ summarized into monthly and annual water-year aggregates.
 ```{r weather_stations}
 # --- 1. Retrieve NOAA Weather Data ---
 # Buffer park boundary by 5 km to capture representative peripheral stations
-noaa <- getNOAA(st_buffer(park_boundary, 5000), "GLAC") %>%
+noaa <- cache_download("noaa", getNOAA(st_buffer(park_boundary, 5000), "GLAC")) %>%
   st_transform(4326)
 
 # Extract a metadata list of unique stations (one row per station)
@@ -387,11 +472,12 @@ Water Equivalent (SWE, reported from SNOTEL as "wteq" variable), essential for u
 ```{r snotel}
 # --- 1. Retrieve SNOTEL Data ---
 # Search for SNOTEL sites within 20 km of the recharge area boundary
-snotel <- getSNOTEL(
+snotel <- cache_download("snotel", getSNOTEL(
   aoi  = recharge_area %>% dplyr::mutate(Name = "Recharge Area"),
   dist = 20000,
   years = "all"
-) %>%
+)) %>%
+  sf::st_drop_geometry() %>%   # tidy as a plain table; site points are rebuilt from latitude/longitude below
   clean_names()
 
 # Extract unique station metadata for mapping
@@ -515,8 +601,8 @@ bbox_vals <- sf::st_bbox(park_boundary) %>%
   round(digits = 5)
 
 # Retrieve monitoring locations and calculate distance to water sources
-usgs_sw <- read_waterdata_monitoring_location(bbox = bbox_vals, 
-                                              site_type = "Stream") %>%
+usgs_sw <- cache_download("usgs_stream_sites", read_waterdata_monitoring_location(bbox = bbox_vals, 
+                                              site_type = "Stream")) %>%
   st_transform(crs = st_crs(park_boundary)) %>%
   st_filter(park_boundary) %>%
   mutate(dist_m = as.numeric(st_distance(geometry, st_transform(select_sources, st_crs(park_boundary)))))
@@ -526,10 +612,10 @@ nearest_usgs_sw <- usgs_sw %>%
   slice_min(order_by = dist_m, n = 15)
 
 # --- 2. Retrieve Daily Discharge Data ---
-usgs_discharge <- read_waterdata_daily(
+usgs_discharge <- cache_download("usgs_discharge_daily", read_waterdata_daily(
   monitoring_location_id = nearest_usgs_sw$monitoring_location_id,
   parameter_code         = "00060"  # Discharge, cubic feet per second
-)
+))
 
 # Refine station list based on successful data retrieval
 nearest_usgs_sw <- nearest_usgs_sw %>%
@@ -672,23 +758,24 @@ swiftcurrent_watershed_area <- swiftcurrent_watershed %>%
 
 
 # Get Swiftcurren elevation range
-sc_dem <- get_elev_raster(swiftcurrent_watershed, z = 10, clip = "bbox") %>%
-  rast() %>% 
+sc_dem <- cache_download("swiftcurrent_dem_z10", get_elev_raster(swiftcurrent_watershed, z = 10, clip = "bbox")) %>%  # returns a SpatRaster
   mask(vect(swiftcurrent_watershed))
 
-ca_dem <- get_elev_raster(recharge_area, z = 10, clip = "bbox") %>%
-  rast() %>%
-  mask(vect(recharge_area))
+# Recharge area elevations come from the 1 m lidar DTM used to delineate it
+ca_dem <- rast(lidar_dem_path) %>%
+  crop(vect(st_transform(recharge_area, 26912))) %>%
+  mask(vect(st_transform(recharge_area, 26912)))
 
 #Extract Min and Max elev
 sc_stats <- minmax(sc_dem)
 ca_stats <- minmax(ca_dem)
 
-
-
-
 # Print results
-message(paste0("Elevation Range: ", round(elev_range, 2), " meters"))
+message(paste0("Swiftcurrent elevation range: ", round(sc_stats[1], 0), " - ",
+               round(sc_stats[2], 0), " m"))
+message(paste0("Recharge area elevation range: ", round(ca_stats[1], 0), " - ",
+               round(ca_stats[2], 0), " m (mean ",
+               round(global(ca_dem, mean, na.rm = TRUE)[[1]], 0), " m)"))
 
 
 ```
@@ -703,7 +790,7 @@ bbox_vals <- sf::st_bbox(park_boundary) %>%
   as.numeric() %>%
   round(digits = 5)
 
-usgs_groundwater <- read_waterdata_monitoring_location(bbox = bbox_vals, site_type = "Well") %>%
+usgs_groundwater <- cache_download("usgs_well_sites", read_waterdata_monitoring_location(bbox = bbox_vals, site_type = "Well")) %>%
   st_transform(crs = st_crs(park_boundary)) %>%
   st_filter(park_boundary) %>%
   # Only keep wells with a vertical datum for elevation-to-depth calculations
@@ -712,10 +799,10 @@ usgs_groundwater <- read_waterdata_monitoring_location(bbox = bbox_vals, site_ty
 # --- 2. Retrieve Field Measurements ---
 # Parameter 62611 = groundwater elevation above datum (ft)
 usgs_groundwater_levels <-
-  dataRetrieval::read_waterdata_field_measurements(
+  cache_download("usgs_well_field_measurements", dataRetrieval::read_waterdata_field_measurements(
     monitoring_location_id = usgs_groundwater$monitoring_location_id,
     parameter_code         = "62611"
-  ) %>%
+  )) %>%
   dplyr::mutate(
     date    = as.Date(time),
     site_no = sub("USGS-", "", monitoring_location_id),
@@ -773,8 +860,8 @@ recharge_area_ft2 <- recharge_area %>%
   as.numeric()
 
 # Delineate HUC12 watersheds within a 2 km buffer of the recharge area
-watersheds <- get_huc(AOI = recharge_area %>% st_buffer(2000), type = "huc12")
-flowlines  <- get_nhdplus(AOI = dplyr::summarize(watersheds))
+watersheds <- cache_download("watersheds_huc12", get_huc(AOI = recharge_area %>% st_buffer(2000), type = "huc12"))
+flowlines  <- cache_download("nhdplus_flowlines", get_nhdplus(AOI = dplyr::summarize(watersheds)))
 
 # Visualize
 mapview(watersheds,
@@ -795,9 +882,10 @@ In this section, we transition from historical observations to future climate pr
 #### - GCM Selection
 
 ```{r gcm_skill}
-# Load GCM regional skill rankings for the Southwest Region (SWR)
-all_cfs <- read_delim("https://raw.githubusercontent.com/rossyndicate/CCRP_automated_climate_futures/master/data/general/GCM_skill_by_region.txt") %>%
-  dplyr::filter(Region == "SWR") %>%
+# Load GCM regional skill rankings for the Pacific Northwest region (PWR),
+# the Rupp et al. region that includes Glacier National Park
+all_cfs <- cache_download("GCM_skill_by_region", read_delim("https://raw.githubusercontent.com/rossyndicate/CCRP_automated_climate_futures/master/data/general/GCM_skill_by_region.txt")) %>%
+  dplyr::filter(Region == "PWR") %>%
   # Standardize naming for HadGEM model variants
   dplyr::mutate(
     GCM = ifelse(GCM == "HadGEM2-ES.", "HadGEM2-ES365.", GCM),
@@ -837,11 +925,6 @@ In this section, we acquire the high-resolution climate datasets necessary for d
 clim_hist        <- readRDS("data/park/GLAC/clim_hist.rds")
 aoi_gridmet_grid <- readRDS("data/park/GLAC/aoi_gridmet_grid.rds")
 
-# Extract unique grid center points with area weights
-clim_pts <- clim_hist %>%
-  group_by(x, y, area_weight) %>%
-  summarize() %>%
-  st_as_sf(coords = c("x", "y"), crs = 4326, remove = FALSE)
 
 # --- Load Future Climate Data (MACA GCMs) ---
 # Download took >1 hr; load from disk.
@@ -858,12 +941,20 @@ clim_pts <- clim_hist %>%
 clim_fut <- readRDS("data/park/GLAC/clim_fut.rds")
 
 # --- Subset to target grid cells ---
-# Retain 3 columns directly west of the recharge area
+# Retain the column of three cells around the recharge area: the center cell
+# contains the whole contributing area, plus its north and south neighbors
 clim_hist <- clim_hist %>%
   dplyr::filter(x <= -113.72 & x > -113.72 - 0.04)
 
 clim_fut <- clim_fut %>%
   dplyr::filter(x <= -113.72 & x > -113.72 - 0.04)
+
+# Extract unique grid center points with area weights (after subsetting, so the
+# WBM points match the retained climate cells)
+clim_pts <- clim_hist %>%
+  group_by(x, y, area_weight) %>%
+  summarize() %>%
+  st_as_sf(coords = c("x", "y"), crs = 4326, remove = FALSE)
 
 
 
@@ -922,7 +1013,7 @@ wbm_base_args <- list(
   Soil_mult       = 1,
   PET_mult        = 1,
   area_weighted   = FALSE,
-  aoi             = select_sources$watershed[[1]],
+  aoi             = recharge_area,  # only used when area_weighted = TRUE
   grid            = aoi_gridmet_grid,
   aggregate       = FALSE
 )
@@ -953,7 +1044,7 @@ test_hock <- FALSE
 if (test_hock) {
   ggplot(
     snotel_tidy %>%
-      dplyr::filter(station_name == "Flattop Mtn.") %>%
+      dplyr::filter(name == "Flattop Mtn.") %>%
       dplyr::select(date, wteq_i) %>%
       left_join(recharge_wbm %>% dplyr::select(date, snowpack_in_wbm, x, y), by = "date") %>%
       dplyr::filter(year(date) == 2020) %>%
@@ -1008,8 +1099,8 @@ flow into the gallery.
 # --- Routing Parameter Configuration ---
 
 # Runoff scale factor: multiplied against WBM runoff to match observed supply volumes.
-# Tested across 0.005 – 0.9; values above 0.05 produce implausibly high volumes.
-runoff_scale <- 0.015
+# Tested across 0.0026 – 0.46; values above 0.026 produce implausibly high volumes.
+runoff_scale <- 0.007739
 
 
 # Calibrated routing parameters (manual calibration; see chunk `automated_cal_NOT_RUN`)
@@ -1134,7 +1225,7 @@ ggsave("data/park/GLAC/Figs/flow_calibration_supply_demand.jpg", dpi = 600, widt
 
 # Define plausible parameter ranges 
 param_grid <- expand.grid(
-  runoff_scale = seq(0.01, 0.03, by = 0.01),
+  runoff_scale = c(0.00516, 0.01032, 0.01548),
   tau_q        = c(2, 3, 5, 8),          # Quick-flow recession constant (days)
   tau_s        = c(60, 90, 120, 180),    # Slow-flow recession constant (days)
   vs           = c(0.5, 0.6, 0.7, 0.8)  # Fraction of storage routed as slow flow
@@ -1224,7 +1315,7 @@ ensemble_summary <- ensemble_results %>%
 # --- 4. Calibrated (best-fit) run for reference overlay ---
 best_dat <- base_dat %>%
   dplyr::mutate(
-    runoff_gal = 0.015 * cf_to_gal * (runoff_in_wbm / 12) * recharge_area_ft2
+    runoff_gal = runoff_scale * cf_to_gal * (runoff_in_wbm / 12) * recharge_area_ft2
   ) %>%
   dplyr::select(date, runoff_gal)
 
@@ -1358,15 +1449,15 @@ We select a subset of GCMs that bound the uncertainty range at Glacier. We evalu
 
 # --- Routing Parameter Sets ---
 # Best-fit: manually calibrated values
-params_best <- list(runoff_scale = 0.015, tau_q = 3,  tau_s = 120, vs = 0.7)
+params_best <- list(runoff_scale = 0.007739, tau_q = 3,  tau_s = 120, vs = 0.7)
 
 # Low: parameter combination that minimises routed flow
 # (lowest scale factor, fastest recession, lowest slow-flow fraction)
-params_low  <- list(runoff_scale = 0.010, tau_q = 8,  tau_s = 60,  vs = 0.5)
+params_low  <- list(runoff_scale = 0.005160, tau_q = 8,  tau_s = 60,  vs = 0.5)
 
 # High: parameter combination that maximises routed flow
 # (highest scale factor, slowest recession, highest slow-flow fraction)
-params_high <- list(runoff_scale = 0.050, tau_q = 2,  tau_s = 180, vs = 0.8)
+params_high <- list(runoff_scale = 0.02580, tau_q = 2,  tau_s = 180, vs = 0.8)
 
 # --- Routing wrapper that accepts an explicit parameter set ---
 apply_routing_p <- function(df, runoff_col, p) {
@@ -1427,8 +1518,8 @@ all_clim_stats <- wbm_all %>%
   dplyr::mutate(
     year       = year(date),
     stat_period = case_when(
-      year >= hist_yrs[[1]] & year <= hist_yrs[[2]] ~ "Baseline",
-      year >= fut_yrs[[1]]  & year <  fut_yrs[[2]]  ~ "Future",
+      in_hist(year) ~ "Baseline",
+      in_fut(year)  ~ "Future",
       TRUE ~ "Other"
     )
   ) %>%
@@ -1506,6 +1597,7 @@ selected_gcms <- select_cfs_deep_dive(
   df = future_differentials,
   x, y, x_name, y_name, high_x, low_x, high_y, low_y,
   to_plot = TRUE,
+  region = "PWR",
   highlight = c("Hot Dry", "Warm Wet")
 )
 
@@ -1542,7 +1634,8 @@ wbm <- wbm_all %>%
     by = "GCM"
   ) %>%
   dplyr::mutate(CF = ifelse(GCM == "GridMET", "Historical", CF)) %>%
-  dplyr::filter(!is.na(CF), year(date) > 1979) %>%
+  # 1979 is kept as the WBM spin-up year (excluded from statistics by the analysis windows)
+  dplyr::filter(!is.na(CF), year(date) >= 1979) %>%
   dplyr::group_by(date, CF, GCM) %>%
   # Average across grid cells to get a single AOI-mean time series
   dplyr::summarize(across(where(is.numeric), \(x) mean(x, na.rm = TRUE)), .groups = "drop") %>%
@@ -1556,16 +1649,18 @@ rm(wbm_all)
 gc()
 
 # --- 2. Apply Routing to Runoff (Mid, Low, High uncertainty bounds) ---
-# Using apply_routing() defined in the `routing_functions` chunk.
+# Mid uses the calibrated parameters (apply_routing(), `routing_functions`
+# chunk); low and high use the tested parameter sets that minimize and
+# maximize routed flow (params_low / params_high, `cf_selection` chunk), so
+# the bounds match Table A1 and the 40-projection statistics.
 wbm <- wbm %>%
   dplyr::group_by(GCM) %>%
   dplyr::mutate(
-    runoff_gal_low  = 0.5 * runoff_gal,
-    runoff_gal_high = 1.5 * runoff_gal,
-    # Recalculate inflow with high and low factors.
-    inflow_gal      = apply_routing(data.table(date, runoff_gal),      "runoff_gal"),
-    inflow_gal_low  = apply_routing(data.table(date, runoff_gal_low),  "runoff_gal_low"),
-    inflow_gal_high = apply_routing(data.table(date, runoff_gal_high), "runoff_gal_high"),
+    runoff_gal_low  = params_low$runoff_scale  / runoff_scale * runoff_gal,
+    runoff_gal_high = params_high$runoff_scale / runoff_scale * runoff_gal,
+    inflow_gal      = apply_routing(data.table(date, runoff_gal), "runoff_gal"),
+    inflow_gal_low  = apply_routing_p(data.table(date, runoff_gal_low),  "runoff_gal_low",  params_low),
+    inflow_gal_high = apply_routing_p(data.table(date, runoff_gal_high), "runoff_gal_high", params_high),
     inflow_cf       = inflow_gal      * gal_to_cf,
     inflow_cf_low   = inflow_gal_low  * gal_to_cf,
     inflow_cf_high  = inflow_gal_high * gal_to_cf
@@ -1593,6 +1688,21 @@ wbm_annual <- wbm %>%
     across(all_of(max_cols),  \(x) max(x,  na.rm = TRUE))
   )
 
+# Years with incomplete daily records (e.g., at the ends of the historical and
+# future runs). These are dropped from annual figures only; all statistics use
+# full-year analysis windows.
+partial_years <- wbm %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(year = year(date)) %>%
+  dplyr::distinct(CF, GCM, year, date) %>%
+  dplyr::count(CF, year, name = "n_days") %>%
+  dplyr::filter(n_days < 365) %>%
+  dplyr::select(CF, year)
+
+drop_partial_years <- function(df) {
+  dplyr::anti_join(df, partial_years, by = c("CF", "year"))
+}
+
 wbm_monthly <- wbm %>%
   dplyr::mutate(ym = make_ym(date)) %>%
   dplyr::select(-date) %>%
@@ -1605,7 +1715,7 @@ wbm_monthly <- wbm %>%
 
 # --- 5. Print Percentage Change Summary ---
 wbm_stats <- wbm_annual %>%
-  dplyr::filter(year < 2013 | (year > 2034 & year < 2065)) %>%
+  dplyr::filter(in_window(year)) %>%
   dplyr::group_by(CF) %>%
   dplyr::summarize(
     tmean_F               = mean(tmean_F),
@@ -1633,8 +1743,8 @@ monthly_supply_proportions <- wbm_monthly %>%
     month = month(ym),
     year  = year(ym),
     group = case_when(
-      year <= 2012                       ~ "Historical",
-      year > 2034 & year < 2065         ~ "Future",
+      in_hist(year)                      ~ "Historical",
+      in_fut(year)                       ~ "Future",
       TRUE                               ~ NA_character_
     )
   ) %>%
@@ -1662,7 +1772,7 @@ monthly_supply_proportions <- wbm_monthly %>%
 ```{r wbm_stats}
 
 wbm_stats <- wbm_annual %>%
-  dplyr::filter(year < 2013 | (year > 2034 & year < 2065)) %>%
+  dplyr::filter(in_window(year)) %>%
   dplyr::group_by(CF) %>%
   dplyr::summarize(
     tmean_F                = mean(tmean_F),
@@ -1714,6 +1824,7 @@ wbm_stats_long <- tibble::tibble(
   dplyr::select(Variable, Historical, Hot_Dry, Hot_Dry_pct_change, Warm_Wet, Warm_Wet_pct_change)
 
 library(knitr)
+save_table(wbm_stats_long, "water_balance_summary")
 library(kableExtra)
 
 # Variables measured in gallons (comma-format, 0 decimals)
@@ -1752,7 +1863,7 @@ wbm_stats_long %>%
   kable(
     col.names = c("Variable", "Historical", "Hot Dry", "% Change", "Warm Wet", "% Change"),
     align     = c("l", "r", "r", "r", "r", "r"),
-    caption   = "Mean annual water budget components: historical baseline (1979–2012) vs. mid-century futures (2035–2065)"
+    caption   = "Mean annual water budget components: historical baseline (1980–2012) vs. mid-century futures (2035–2064)"
   ) %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE) %>%
   add_header_above(c(" " = 2, "Hot Dry" = 2, "Warm Wet" = 2))
@@ -1882,7 +1993,7 @@ ggplot(p_dat_stat) +
 
 ```{r visitation_data}
 # --- 1. Park-wide Monthly Visitation ---
-all_vis <- getUnitVisitation(units = park, startYear = 1979, endYear = 2026) %>%
+all_vis <- cache_download("visitors_1979_2026", getUnitVisitation(units = park, startYear = 1979, endYear = 2026)) %>%
   dplyr::mutate(
     ym            = lubridate::ym(paste0(Year, "-", Month)),
     TotalVisitors = RecreationVisitors + NonRecreationVisitors
@@ -1897,7 +2008,7 @@ all_vis <- getUnitVisitation(units = park, startYear = 1979, endYear = 2026) %>%
 # Approximate as sum of West Entrance, Saint Mary, and Camas visitors
 # (the three entrances to Going-to-the-Sun Road)
 logan_vis <- read_csv("data/park/GLAC/Visitation/GLAC.csv") %>%
-  dplyr::filter(metric %in% c("Visitors To Many Glacier",
+  dplyr::filter(metric %in% c("Visitors To Saint Mary",
                                "Visitors Via West Entrance",
                                "Visitors To Camas")) %>%
   dplyr::mutate(ym = month_start) %>%
@@ -2009,15 +2120,17 @@ logan_sdv_monthly_proportions <- logan_sdv %>%
 
 
 ```{r use_per_visitor_summary}
-# Observed use per visitor rate (July–August peak months only)
+# Observed use per visitor rate (July–August peak months only). Uses
+# use_per_visitor, which scales visitors to the days the system was open, so
+# late openings (e.g., July 13, 2022) don't bias the rate low.
 obs_use_per_visitor <- logan_sdv %>%
   dplyr::filter(month(ym) %in% c(7, 8)) %>%
-  dplyr::mutate(use_pv = use_gal / LoganVisitors) %>%
   dplyr::summarize(
-    max_use_p  = max(use_pv),
-    mean_use_pv = mean(use_pv),
-    min_use_pv  = min(use_pv)
+    max_use_pv  = max(use_per_visitor),
+    mean_use_pv = mean(use_per_visitor),
+    min_use_pv  = min(use_per_visitor)
   )
+obs_use_per_visitor
 ```
 
 Now, we develop a logistic visitation growth model to project future demand, accounting for population growth with an assumed carrying capacity.
@@ -2202,7 +2315,7 @@ vis_clim <- vis_clim %>%
 # --- 3. Monthly Visitation Projections ---
 proj_vis_sum <- vis_clim %>%
   ungroup() %>%
-  dplyr::filter(year > 2034, year < 2065) %>%
+  dplyr::filter(in_fut(year)) %>%
   dplyr::summarize(
     mean_vis = mean(vis_smooth_mid),
     max_vis  = max(vis_smooth_high),
@@ -2243,13 +2356,14 @@ monthly_visitors <- vis_clim %>%
 
 #### - Water use
 
-We estimate water use based on visitation with low, mid, and high per-visitor use rates from published values.
+We estimate water use based on visitation with low, mid, and high per-visitor use rates from the observed July–August record.
 
 ```{r water_use}
-# Per-visitor water demand assumptions (gallons/visitor)
-low_use_per_visitor  <- 0.19  # Low range (Hughes, 1996)
-mid_use_per_visitor  <- 0.37  # Mid range
-high_use_per_visitor <- 0.48  # High range
+# Per-visitor water demand (gallons/visitor): minimum, mean, and maximum of the
+# observed July–August rates (chunk `use_per_visitor_summary`)
+low_use_per_visitor  <- round(obs_use_per_visitor$min_use_pv,  2)
+mid_use_per_visitor  <- round(obs_use_per_visitor$mean_use_pv, 2)
+high_use_per_visitor <- round(obs_use_per_visitor$max_use_pv,  2)
 
 # --- Monthly Use Estimates ---
 monthly_use <- monthly_visitors %>%
@@ -2297,11 +2411,11 @@ monthly_use_proportions <- monthly_use %>%
   dplyr::summarize(
     mid_use_obs  = mean(use_gal,                                   na.rm = TRUE),
     mid_use_hist = mean(monthly_use_mid[year < 2025],              na.rm = TRUE),
-    mid_use_fut  = mean(monthly_use_mid[year > 2034 & year < 2065]),
+    mid_use_fut  = mean(monthly_use_mid[in_fut(year)]),
     low_use_hist = mean(monthly_use_low[year < 2025],              na.rm = TRUE),
-    low_use_fut  = mean(monthly_use_low[year > 2034 & year < 2065]),
+    low_use_fut  = mean(monthly_use_low[in_fut(year)]),
     high_use_hist = mean(monthly_use_high[year < 2025],            na.rm = TRUE),
-    high_use_fut  = mean(monthly_use_high[year > 2034 & year < 2065])
+    high_use_fut  = mean(monthly_use_high[in_fut(year)])
   ) %>%
   dplyr::mutate(
     month_date = as_date(paste0("2000-", month, "-01")),
@@ -2420,7 +2534,7 @@ DS_df <- wbm_annual %>%
   )
 
 DS_stats <- DS_df %>%
-  filter((year >= 1980 & year <= 2012) | (year >= 2035 & year <= 2064)) %>%
+  filter(in_window(year)) %>%
   group_by(CF) %>%
   summarize(
     n                       = n(),
@@ -2436,19 +2550,14 @@ print(DS_stats)
 # 7. Drought (SPEI)
 
 ```{r spei}
-# SPEI aggregation window: change ag_n to switch between 1-month and 6-month SPEI
-ag_n         <- 6
-freq         <- 12 / ag_n
-agg_months   <- ifelse(ag_n == 1, paste0(ag_n, " month"), paste0(ag_n, " months"))
+# 6-month SPEI on a monthly time step (accumulation period ag_n months)
+ag_n <- 6
+freq <- 12   # monthly time step; event durations below are divided by freq to report years
 
 agg_wbm <- wbm %>%
   dplyr::ungroup() %>%
-  dplyr::mutate(
-    year    = year(date),
-    month   = month(date),
-    time_ag = floor_date(date, agg_months)
-  ) %>%
-  dplyr::group_by(year, time_ag, CF) %>%
+  dplyr::mutate(ym = floor_date(date, "month")) %>%
+  dplyr::group_by(ym, CF) %>%
   dplyr::summarize(
     precip_in_wbm = sum(precip_in_wbm, na.rm = TRUE),
     tmean_C       = mean(tmean_C,       na.rm = TRUE),
@@ -2460,38 +2569,54 @@ agg_wbm <- wbm %>%
   ) %>%
   dplyr::mutate(
     balance = precip_in_wbm - pet_in_wbm,
-    month   = month(time_ag)
-  )
+    year    = year(ym),
+    month   = month(ym)
+  ) %>%
+  dplyr::arrange(CF, ym)
 
-end_year  <- tail(agg_wbm$year,  1)
-end_month <- tail(agg_wbm$month, 1)
-
-# Helper: compute SPEI for one CF scenario (requires historical baseline)
+# Helper: compute SPEI for one CF scenario appended to the historical record, so
+# each future is referenced to the same historical normalization period
 compute_spei_for_cf <- function(agg_wbm_df, target_cf) {
-  agg_wbm_df %>%
-    dplyr::ungroup() %>%
+  d <- agg_wbm_df %>%
     dplyr::filter(CF %in% c("Historical", target_cf)) %>%
+    dplyr::arrange(ym)
+  d %>%
     dplyr::mutate(
-      spei = c(spei(ts(c(balance), end = c(end_year, end_month), frequency = freq),
-                    scale = freq, ref.end = c(2023, 1))[["fitted"]])
-    ) %>%
-    dplyr::mutate(ym = as.Date(paste0(year, "-", month, "-01")))
+      spei = as.numeric(spei(
+        ts(balance, start = c(year(min(ym)), month(min(ym))), frequency = freq),
+        scale     = ag_n,
+        # Standardize to the same 1980-2012 baseline used for every other
+        # historical-vs-future comparison in the report
+        ref.start = c(hist_yrs[1], 1),
+        ref.end   = c(hist_yrs[2], 12)
+      )[["fitted"]])
+    )
 }
 
 spei_hot_dry  <- compute_spei_for_cf(agg_wbm, "Hot Dry")
 spei_warm_wet <- compute_spei_for_cf(agg_wbm, "Warm Wet")
 
-# Combine: retain separate Hot Dry future only from 2024 onward
+# Combine: Historical and Warm Wet rows from the Warm Wet fit, Hot Dry rows from the Hot Dry fit
 spei <- bind_rows(
-  spei_hot_dry  %>% dplyr::filter(year >= 2024),
+  spei_hot_dry  %>% dplyr::filter(CF == "Hot Dry"),
   spei_warm_wet
-)
+) %>%
+  # A few late-century Hot Dry months fall below the support of the log-logistic
+  # fit to the 1980-2012 baseline and return -Inf; cap SPEI at +/-3 (beyond the
+  # extreme-drought threshold, so category counts are unaffected)
+  dplyr::mutate(spei = pmin(pmax(spei, -3), 3))
+
+# Statistics use the baseline window for Historical and the future window for each CF
+spei_in_window <- function(df) {
+  df %>% dplyr::filter((CF == "Historical" & in_hist(year)) |
+                       (CF != "Historical" & in_fut(year)))
+}
 
 # --- Drought Severity and Duration Metrics ---
 
 # Severity summary: fraction of time in moderate / severe / extreme drought
 spei_severity <- spei %>%
-  dplyr::filter(year < 2065) %>%
+  spei_in_window() %>%
   drop_na(spei) %>%
   dplyr::mutate(
     moderate = spei <= -1,
@@ -2518,14 +2643,16 @@ calc_event_durations <- function(spei_df, flag_col, event_col, suffix) {
                      .groups = "drop") %>%
     dplyr::group_by(CF) %>%
     dplyr::summarize(
-      !!paste0(suffix, "_mean_duration")   := mean(duration, na.rm = TRUE) / freq,
-      !!paste0(suffix, "_max_duration")    := max(duration,  na.rm = TRUE) / freq,
-      !!paste0(suffix, "_median_duration") := median(duration, na.rm = TRUE) / freq,
+      # durations in months (monthly SPEI, so one row = one month)
+      !!paste0(suffix, "_mean_duration")   := mean(duration, na.rm = TRUE),
+      !!paste0(suffix, "_max_duration")    := max(duration,  na.rm = TRUE),
+      !!paste0(suffix, "_median_duration") := median(duration, na.rm = TRUE),
       !!paste0(suffix, "_mean_spei")       := mean(mean_spei, na.rm = TRUE)
     )
 }
 
 spei_frequency <- spei %>%
+  spei_in_window() %>%
   drop_na(spei) %>%
   dplyr::mutate(
     moderate  = spei <= -1,
@@ -2549,6 +2676,25 @@ spei_metrics <- calc_event_durations(spei_frequency, "moderate", "mod_event", "m
   tibble::rownames_to_column(var = "Metric") %>%
   arrange(Metric)
 
+# Late-century context: longest drought events (years) over the full projection
+# period (2026-2099), outside the statistics window used for the drought table
+max_run_yrs <- function(x) {
+  r <- rle(x)
+  if (any(r$values)) max(r$lengths[r$values]) / freq else 0
+}
+spei_full_period_durations <- spei %>%
+  dplyr::filter(CF != "Historical", year >= 2026, year <= 2099) %>%
+  drop_na(spei) %>%
+  dplyr::arrange(CF, ym) %>%
+  dplyr::group_by(CF) %>%
+  dplyr::summarize(
+    mod_max_duration_yrs = max_run_yrs(spei <= -1),
+    sev_max_duration_yrs = max_run_yrs(spei <= -1.5),
+    ext_max_duration_yrs = max_run_yrs(spei <= -2),
+    .groups = "drop"
+  )
+save_table(spei_full_period_durations, "spei_max_durations_2026_2099")
+
 # Quick scatter: SPEI vs July snowmelt
 ggplot(spei %>% dplyr::filter(month(ym) == 7),
        aes(x = spei, y = snow_in_wbm)) +
@@ -2567,9 +2713,8 @@ Annual runoff summary statistics for historical and future periods, including % 
 
 ```{r table_1}
 change <- wbm_annual %>%
-  filter(year >= 1979 & year < 2065) %>%
-  mutate(stat_group = ifelse(year < 2013, "Hist",
-                      ifelse(year >= 2035, "Fut", "Present"))) %>%
+  filter(in_window(year)) %>%
+  mutate(stat_group = ifelse(in_hist(year), "Hist", "Fut")) %>%
   dplyr::ungroup() %>%
   dplyr::select(stat_group, CF, runoff_gal, inflow_open_months_gal) %>%
   dplyr::group_by(CF, stat_group) %>%
@@ -2611,6 +2756,7 @@ change <- wbm_annual %>%
   dplyr::select(Component, Statistic, Historical, `Hot Dry`, `Warm Wet`,
                 `Hot Dry % Change`, `Warm Wet % Change`)
 
+save_table(change, "table_runoff_inflow_change")
 kable(change,
     caption = "Runoff and Inflow statistics (millions of gallons)"
   ) %>%
@@ -2621,7 +2767,7 @@ kable(change,
 ##### Table 2: Drought Metrics
 
 ```{r drought_metrics}
-spei_metrics %>%
+drought_table <- spei_metrics %>%
   dplyr::mutate(
     Category  = case_when(
       grepl("ext", Metric) ~ "Extreme",
@@ -2630,24 +2776,28 @@ spei_metrics %>%
       TRUE                 ~ "Overall"
     ),
     Statistic = case_when(
-      grepl("mean_duration",   Metric) ~ "Mean (Duration)",
-      grepl("max_duration",    Metric) ~ "Maximum (Duration)",
+      grepl("mean_duration",   Metric) ~ "Mean Duration (months)",
+      grepl("max_duration",    Metric) ~ "Maximum Duration (months)",
       grepl("mean_spei",       Metric) ~ "Mean (SPEI)",
       grepl("median_spei",     Metric) ~ "Median (SPEI)",
       grepl("percent",         Metric) ~ "% of Period",
-      grepl("median_duration", Metric) ~ "Median (Duration)",
+      grepl("median_duration", Metric) ~ "Median Duration (months)",
       grepl("sd_spei",         Metric) ~ "Standard Deviation",
+      Metric == "n"                    ~ "n (months)",
       TRUE                             ~ Metric
     )
   ) %>%
   arrange(
     factor(Category,   levels = c("Overall", "Moderate", "Severe", "Extreme")),  # ← primary sort
     factor(Statistic,  levels = c("% of Period", "Mean (SPEI)", "Median (SPEI)",
-                                   "Standard Deviation", "n", "Mean (Duration)",
-                                   "Median (Duration)", "Maximum (Duration)"))   # ← secondary sort
+                                   "Standard Deviation", "n (months)", "Mean Duration (months)",
+                                   "Median Duration (months)", "Maximum Duration (months)"))   # ← secondary sort
   ) %>%
   dplyr::select(Category, Statistic, Historical, `Hot Dry`, `Warm Wet`) %>%
   dplyr::mutate(across(where(is.numeric), ~ signif(.x, 3)))
+
+save_table(drought_table, "table_drought_metrics")
+drought_table
 ```
 
 ##### Table 3: Demand:Supply Ratio
@@ -2656,9 +2806,9 @@ spei_metrics %>%
 DS_stats_table <- DS_df %>%
   dplyr::mutate(
     stat_period = case_when(
-      year >= 1980 & year < 2012 ~ "historical",
+      in_hist(year)              ~ "historical",
       year >= 2010 & year < 2025 ~ "near-term",
-      year >= 2035 & year < 2065 ~ "future",
+      in_fut(year)               ~ "future",
       TRUE                        ~ NA_character_
     )
   ) %>%
@@ -2674,6 +2824,7 @@ DS_stats_table <- DS_df %>%
     .groups         = "keep"
   )
 
+save_table(DS_stats_table, "table_demand_supply")
 kable(DS_stats_table)
 ```
 
@@ -2709,6 +2860,7 @@ SD <- monthly_use_proportions %>%
                 days_avg, days_peak) %>%
   dplyr::mutate(across(where(is.numeric), ~ signif(.x, 3)))
 
+save_table(SD, "table_storage_demand")
 kable(SD)
 ```
 
@@ -2839,234 +2991,204 @@ ggsave("data/park/GLAC/Figs/inflow_range_fig.jpg", width = 4, height = 2.5, dpi 
 
 ##### Site Figure
 
+Map of the Logan Pass water system on the NPS Park Tiles basemap
+(https://www.nps.gov/maps/tools/park-tiles/, via `get_nps_basemap()` /
+`geom_nps_basemap()` in `src/nps_basemap.R`, adapted from the MORA WSVA),
+with a shadow-only hillshade from the 1 m lidar DTM so the alpine terrain of
+the contributing area reads clearly. A locator inset is joined to the main
+map in code with `patchwork::inset_element()`.
+
 ```{r figure_site}
-# Define spatial extents for the two map panels
-fig_aoi <- st_buffer(recharge_area, 1200) %>% st_transform(4326)
+# --- 1. Map extent: contributing area + Logan Pass facilities, padded --------
+site_fig_bbox_utm <- st_union(st_union(st_geometry(st_transform(recharge_area, 26912))),
+                              st_union(st_geometry(st_transform(sel_bldg, 26912)))) %>%
+  st_buffer(700) %>%
+  st_bbox()
+site_fig_bbox <- site_fig_bbox_utm %>% st_as_sfc() %>% st_transform(3857) %>% st_bbox()
 
+# --- 2. NPS Park Tiles basemaps (main map and inset) --------------------------
+# Tiles are Web Mercator (EPSG:3857), so everything else is projected to match
+site_tiles <- cache_download("park_tiles_site_z15", get_nps_basemap(
+  aoi = st_as_sf(st_as_sfc(site_fig_bbox)), style = "standard", buffer_km = 0.3, zoom = 15))
+inset_tiles <- cache_download("park_tiles_inset_z9", get_nps_basemap(
+  aoi = park_boundary, style = "standard", buffer_km = 3, zoom = 9))
 
-# Road network from OSM
-#roads <- opq(bbox = st_bbox(fig_aoi)) %>%
-#  add_osm_feature(key = "highway") %>%
-#  osmdata_sf()
+# --- 3. Lidar hillshade --------------------------------------------------------
+# The delineation DTM covers only the catchment, so read a 3 m window over the
+# full map extent from the same USGS 3DEP 1 m tiles
+site_fig_dem_path <- file.path(lidar_dir, "lidar_DTM_site_fig_3m.tif")
+if (!file.exists(site_fig_dem_path)) {
+  site_fig_window <- ext(site_fig_bbox_utm[c("xmin", "xmax", "ymin", "ymax")]) + 400
+  site_fig_dem <- purrr::map(lidar_tiles, ~ crop(rast(paste0(lidar_base, .x)), site_fig_window)) %>%
+    unname() %>%
+    do.call(terra::merge, .) %>%
+    terra::aggregate(3, mean, na.rm = TRUE)
+  writeRaster(site_fig_dem, site_fig_dem_path, gdal = "COMPRESS=DEFLATE", overwrite = TRUE)
+}
+site_fig_dem <- rast(site_fig_dem_path)
 
-#roads <- roads$osm_lines %>%
-#  mutate(road_type = case_when(
-#    highway %in% c("motorway", "trunk", "primary")    ~ "Major Highway",
-#    highway %in% c("secondary", "tertiary")           ~ "Primary Road",
-#    TRUE                                               ~ "Local/Minor"
-#  )) %>%
-#  filter(road_type != "Local/Minor")
+# Multidirectional hillshade (sun from W, NW, N) is softer than a single sun
+# angle and prints well
+site_slope  <- terrain(site_fig_dem, "slope", unit = "radians")
+site_aspect <- terrain(site_fig_dem, "aspect", unit = "radians")
+site_hs <- purrr::map(c(270, 315, 360), ~ shade(site_slope, site_aspect, angle = 40, direction = .x)) %>%
+  rast() %>%
+  mean() %>%
+  project("EPSG:3857", res = 3)
 
+# Draw only the shadows (dark, semi-transparent where the hillshade is low) so
+# the basemap keeps its colors on lit slopes
+site_hs_vals <- terra::as.matrix(site_hs, wide = TRUE)
+site_hs_alpha <- pmin(1, pmax(0, 1 - site_hs_vals / max(site_hs_vals, na.rm = TRUE))) * 0.45
+site_hs_alpha[is.na(site_hs_alpha)] <- 0
+site_hs_rgba <- matrix(grDevices::rgb(0.08, 0.08, 0.12, site_hs_alpha), nrow = nrow(site_hs_vals))
+site_hs_ext <- ext(site_hs)
 
-# Site figure (tmap v4)
-tmap_mode("plot")
+# --- 4. Labels: peaks and pass (OSM), facilities, gallery ---------------------
+site_peaks <- cache_download("osm_peaks_logan_pass", {
+  osm <- osmdata::opq(bbox = as.numeric(st_bbox(st_transform(st_as_sfc(site_fig_bbox), 4326))),
+                      timeout = 60) %>%
+    osmdata::add_osm_feature("natural", c("peak", "saddle")) %>%
+    osmdata::osmdata_sf()
+  osm$osm_points %>% dplyr::filter(!is.na(name)) %>% dplyr::select(name, natural)
+})
+site_peaks_3857 <- site_peaks %>%
+  dplyr::mutate(
+    elev_ft = terra::extract(site_fig_dem, vect(st_transform(site_peaks, 26912)))[, 2] * 3.28084,
+    # Park Tiles already prints GNIS summit elevations under peak names, so
+    # peaks get names only; the pass gets its lidar elevation
+    label = ifelse(natural == "saddle",
+                   paste0(name, "\n", format(round(elev_ft, -1), big.mark = ","), " ft"),
+                   name)) %>%
+  st_transform(3857)
 
-site_fig <-
-  # --- Watersheds (Modified Legend labels) ---
-  tm_shape(
-  watersheds %>% 
-    # Append " Watershed" to each item in the name column
-    dplyr::mutate(name = 
-                    case_when(
-                      name == "McDonald Creek" ~ "USSR",
-                      name == "Reynolds Creek" ~ "PO"
-                    )), 
-  bbox = fig_aoi
-) +
-  tm_polygons(fill = "name", 
-              fill.scale = tm_scale_categorical(values = c("hotpink", "#7F96AD")), 
-              fill_alpha = 0.2, 
-              col = "black",
-              lwd = 0,
-              lty = "dashed", # <-- Adds the black dashed outline here
-              # Remove the legend title since it's now redundant
-              fill.legend = tm_legend(title = "")) +
-  
-   # --- Continental Divide ---
-  tm_shape(
-  watersheds %>% 
-    slice(1) %>%
-    dplyr::mutate(name ="Continental Divide"), 
-  bbox = fig_aoi
-) +
-  tm_lines( col = "name",
-            col.scale = tm_scale_categorical(values = c("black")), 
-              lwd = 1,
-              lty = "dashed", # <-- Adds the black dashed outline here
-              # Remove the legend title since it's now redundant
-              col.legend = tm_legend(title = "")) +
-  
-  # --- Contributing Area ---
-  tm_shape(recharge_area %>% st_transform(3857) %>% dplyr::mutate(group = "Contributing Area")) +
-  tm_polygons(fill = "group",
-              fill.scale = tm_scale_categorical(values = "dodgerblue"),
-              fill_alpha = 0.2, col = "dodgerblue4", lwd = 1.5,
-              fill.legend = tm_legend(title = "", show = TRUE)) +
+site_intake_3857 <- st_transform(select_sources, 3857)
+site_bldg_3857 <- sel_bldg %>%
+  dplyr::mutate(label = gsub("HBD Logan Pass Building [[:digit:]]+ ", "", BLDGNAME)) %>%
+  st_centroid() %>%
+  st_transform(3857)
+gallery_elev_ft <- terra::extract(site_fig_dem, vect(st_transform(select_sources, 26912)))[, 2] * 3.28084
 
-  # --- Flow lines ---
-tm_shape(flowlines) + 
-  tm_lines(col = "dodgerblue4",
-           lwd = 2) +
-  #tm_text("gnis_name", 
-  #        col = "lightblue3", 
-  #        #bgcol = "black",
-  #        #bgcol_alpha = 0.5,
-  #        size = 0.8, 
-  #        xmod = -1,
-  #        ymod = -5,
-  #        fontface = "italic",
-  #        along_lines = TRUE,
-  #        remove.overlap = TRUE) +
-          #options = opt_tm_text(
-          #  along_lines = TRUE)) +
-  
-  # --- Buildings ---
-  tm_shape(
-    sel_bldg %>%
-      dplyr::mutate(label = gsub("HBD Logan Pass Building ", "", BLDGNAME) %>% 
-                      gsub("[[:digit:]]", "", .)) %>%
-      st_centroid()
-  ) +
-  tm_dots(fill = "gray40", col = "white", lwd = 1, shape = 21, size = 0.8) +
-  tm_text("label", 
-          col = "white", 
-          bgcol = "black", 
-          bgcol_alpha = 0.3,
-          size = 1.1,
-          remove.overlap = TRUE, 
-          # xmod stays in the main call in v4
-          xmod = 0.5, 
-          options = opt_tm_text(
-            point.label = TRUE, 
-            just = "left"
-          )) + 
+# Logan Creek label at the midpoint of its NHDPlus flowline within the map
+logan_creek_lab <- flowlines %>%
+  dplyr::filter(gnis_name == "Logan Creek") %>%
+  st_transform(3857) %>%
+  st_intersection(st_as_sfc(site_fig_bbox)) %>%
+  st_union() %>%
+  st_cast("MULTILINESTRING") %>%
+  st_line_merge() %>%
+  st_cast("LINESTRING") %>%
+  st_line_sample(sample = 0.5) %>%
+  st_cast("POINT") %>%
+  st_sf(geometry = .) %>%
+  dplyr::slice(1) %>%
+  dplyr::mutate(label = "Logan Creek")
 
-  # --- Water Intake ---
-  tm_shape(select_sources %>% dplyr::mutate(group = "Logan Pass Water Intake")) +
-  tm_dots(fill = pal$darkblue, col = "white", lwd = 1.5, shape = 21, size = 0.8) +
-  tm_text("group", 
-          col = "white", 
-          bgcol = "black", 
-          bgcol_alpha = 0.3,
-          size = 1.1,
-          fontface = "bold",
-          remove.overlap = TRUE,
-          # ymod stays in the main call in v4
-          ymod = 0.8,
-          options = opt_tm_text(
-            point.label = TRUE
-          )) + 
+st_xy <- function(x) as.data.frame(st_coordinates(x))
+site_labels <- dplyr::bind_rows(
+  site_bldg_3857 %>% st_drop_geometry() %>% dplyr::select(label) %>%
+    dplyr::bind_cols(st_xy(site_bldg_3857)) %>% dplyr::mutate(face = "plain"),
+  data.frame(label = sprintf("Infiltration gallery\n%s ft",
+                             format(round(gallery_elev_ft, -1), big.mark = ",")),
+             face = "bold") %>%
+    dplyr::bind_cols(st_xy(site_intake_3857)))
 
-  # --- Layout and Extras ---
-  tm_basemap(server = "Esri.WorldTopoMap") +
-  tm_layout(legend.outside = FALSE, 
-            legend.position = c("left", "top"),
-            frame = FALSE, 
-            legend.bg.color = "white", 
-            legend.bg.alpha = 1,
-            legend.title.size = 1.1, 
-            legend.text.size = 1.1) +
-  tm_scalebar(position = c("left", "bottom"), text.size = 1.1, bg.color = "white", bg.alpha = 1) +
-  tm_compass(position = c("right", "top"), size = 2, text.size = 1.1, text.color = "white", bg.color = "white", bg.alpha = 0.2)
+# --- 5. Continental Divide -----------------------------------------------------
+url <- "https://data.openwaterfoundation.org/country/us/usgs/continental-divide/continental-divide-us.geojson"
+continental_divide <- cache_download("continental_divide", st_read(url)) %>%
+  st_filter(st_buffer(park_boundary, 100) %>% st_transform(4326))
 
+# The national line is too coarse at this scale, so locally trace the divide
+# along the boundary between Pend Oreille (region 17) and Saskatchewan
+# (region 09) HUC12s. HUC polygons don't share exact vertices, so keep the
+# region-17 boundary wherever it lies within 30 m of region 09.
+site_huc12 <- cache_download("site_fig_huc12", get_huc(
+  AOI = st_buffer(st_transform(recharge_area, 26912), 2500) %>% st_bbox() %>%
+    st_as_sfc() %>% st_transform(4326) %>% st_as_sf(),
+  type = "huc12")) %>%
+  st_transform(3857)
+site_divide_3857 <- st_intersection(
+  st_boundary(st_union(dplyr::filter(site_huc12, substr(huc12, 1, 2) == "17"))),
+  st_buffer(st_union(dplyr::filter(site_huc12, substr(huc12, 1, 2) == "09")), 30)) %>%
+  st_collection_extract("LINESTRING") %>%
+  st_union() %>%
+  st_line_merge() %>%
+  st_sf(geometry = .)
+
+basin_cols <- c("Pend Oreille (PO)" = "hotpink", "Upper South Saskatchewan (USSR)" = "#7F96AD")
+basins_3857 <- watersheds %>%
+  dplyr::mutate(basin = dplyr::case_when(
+    name == "McDonald Creek" ~ "Pend Oreille (PO)",                 # drains west
+    name == "Reynolds Creek" ~ "Upper South Saskatchewan (USSR)"))  %>% # drains east
+  st_transform(3857)
+
+# --- 6. Main map ----------------------------------------------------------------
+site_main <- ggplot() +
+  geom_nps_basemap(site_tiles) +
+  annotation_raster(site_hs_rgba, xmin = site_hs_ext$xmin, xmax = site_hs_ext$xmax,
+                    ymin = site_hs_ext$ymin, ymax = site_hs_ext$ymax) +
+  geom_sf(data = site_divide_3857, aes(linetype = "Continental Divide"), color = "black", linewidth = 0.7) +
+  geom_sf(data = st_transform(flowlines, 3857), aes(color = "Stream (NHDPlus)"), linewidth = 0.5) +
+  geom_sf(data = st_transform(recharge_area, 3857), aes(color = "Contributing area (1 m lidar)"),
+          fill = "dodgerblue", alpha = 0.22, linewidth = 0.9) +
+  geom_sf(data = site_bldg_3857, shape = 22, size = 2.2, fill = "grey25", color = "white", stroke = 0.6) +
+  geom_sf(data = site_intake_3857, shape = 21, size = 3.2, fill = pal$darkblue, color = "white", stroke = 1) +
+  geom_sf(data = dplyr::filter(site_peaks_3857, natural == "peak"),
+          shape = 24, size = 2.6, fill = "grey15", color = "white", stroke = 0.6) +
+  ggrepel::geom_label_repel(data = site_labels, aes(X, Y, label = label, fontface = face),
+                            size = 2.8, lineheight = 0.9, label.size = 0,
+                            fill = scales::alpha("white", 0.8), min.segment.length = 0,
+                            box.padding = 0.5, seed = 4, segment.color = "grey20") +
+  ggrepel::geom_text_repel(data = site_peaks_3857 %>% dplyr::bind_cols(st_xy(site_peaks_3857)) %>% st_drop_geometry(),
+                           aes(X, Y, label = label), size = 2.8, fontface = "italic", lineheight = 0.9,
+                           color = "grey10", bg.color = "white", bg.r = 0.15, seed = 2, nudge_y = 120) +
+  ggrepel::geom_text_repel(data = logan_creek_lab %>% dplyr::bind_cols(st_xy(logan_creek_lab)) %>% st_drop_geometry(),
+                           aes(X, Y, label = label), size = 2.8, fontface = "italic", color = "dodgerblue4",
+                           bg.color = "white", bg.r = 0.15, seed = 3, nudge_x = 250, segment.color = NA) +
+  scale_color_manual("", values = c("Contributing area (1 m lidar)" = "dodgerblue4",
+                                    "Stream (NHDPlus)" = "dodgerblue2")) +
+  scale_linetype_manual("", values = c("Continental Divide" = "dashed")) +
+  ggspatial::annotation_scale(location = "br", width_hint = 0.25, pad_x = unit(1.8, "cm"),
+                              unit_category = "metric", bar_cols = c("grey15", "white"),
+                              text_cex = 0.7, text_pad = unit(0.2, "cm")) +
+  ggspatial::annotation_north_arrow(location = "br", which_north = "true",
+                                    height = unit(0.9, "cm"), width = unit(0.9, "cm"),
+                                    style = ggspatial::north_arrow_fancy_orienteering(text_size = 7)) +
+  coord_sf(xlim = site_fig_bbox[c("xmin", "xmax")], ylim = site_fig_bbox[c("ymin", "ymax")],
+           crs = 3857, expand = FALSE) +
+  theme_void() +
+  theme(legend.position = "bottom", legend.box = "horizontal",
+        legend.text = element_text(size = 8), legend.margin = margin(0, 0, 0, 0),
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.8),
+        plot.margin = margin(4, 4, 4, 4)) +
+  guides(color = guide_legend(order = 1, nrow = 1), linetype = guide_legend(order = 2))
+
+# --- 7. Locator inset: park, the two basins, divide, and main-map extent -------
+park_3857 <- st_transform(park_boundary, 3857)
+inset_bbox <- st_bbox(st_buffer(park_3857, 3000))
+site_inset <- ggplot() +
+  geom_nps_basemap(inset_tiles) +
+  geom_sf(data = park_3857, fill = NA, color = "seagreen4", linewidth = 0.5) +
+  geom_sf(data = basins_3857, aes(fill = basin), color = NA, alpha = 0.6, show.legend = FALSE) +
+  geom_sf(data = st_transform(continental_divide, 3857), color = "black", linewidth = 0.4, linetype = "dashed") +
+  geom_sf(data = st_as_sfc(site_fig_bbox), fill = NA, color = "red", linewidth = 0.6) +
+  annotate("text", x = mean(inset_bbox[c("xmin", "xmax")]), y = inset_bbox["ymax"] - 9000,
+           label = "Glacier National Park", fontface = "bold.italic", color = "seagreen4", size = 2.6) +
+  scale_fill_manual(values = basin_cols) +
+  coord_sf(xlim = inset_bbox[c("xmin", "xmax")], ylim = inset_bbox[c("ymin", "ymax")],
+           crs = 3857, expand = FALSE) +
+  theme_void() +
+  theme(panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.8),
+        plot.background = element_rect(fill = "white", colour = NA))
+
+# --- 8. Join the inset to the main map (top-right corner of the panel) ---------
+site_fig <- site_main +
+  inset_element(site_inset, left = 0.67, bottom = 0.66, right = 0.99, top = 0.99, align_to = "panel")
 
 site_fig
 
-tmap_save(site_fig, dpi = 600,
-          filename = "data/park/GLAC/Figs/Site_Fig.jpg", width = 7, height = 7)
-```
-
-#### Inset Figure
-```{r inset_figure_site}
-# Define spatial extents for the two map panels
-inset_fig_aoi <- st_buffer(park_boundary, 100) %>% st_transform(4326)
-
-url <- "https://data.openwaterfoundation.org/country/us/usgs/continental-divide/continental-divide-us.geojson"
-continental_divide <- st_read(url) %>%
-  st_filter(inset_fig_aoi)
-mapview(continental_divide)
-
-# Site figure (tmap v4)
-tmap_mode("plot")
-
-inset_site_fig <-
-  
-  # --- Watersheds (Categorical Legend) ---
-  tm_shape(park_boundary, bbox = inset_fig_aoi) +
-  tm_polygons(fill = "seagreen",
-              fill_alpha = 0.2,
-              col = "seagreen") + 
-  tm_text("UNIT_NAME", # or whatever your park name column is called
-          size = 1.3, 
-          fontface = "bold.italic",
-          col = "seagreen4",
-          # Using shadow/bg for readability against the topo map
-          bgcol = "white",
-          bgcol_alpha = 0.4,
-          remove.overlap = TRUE, 
-          ymod = 2.5,
-        options = opt_tm_text(point.label = TRUE)) +
-  
-  # --- Watersheds 
-  tm_shape(watersheds) +
-  tm_polygons(fill = "name", 
-              fill.scale = tm_scale_categorical(values = c("hotpink", "#7F96AD")), 
-              col.scale = tm_scale_categorical(values = c("hotpink", "#7F96AD")),
-              fill_alpha = 0.5, 
-              #col = "white", 
-              lwd = 1,
-              fill.legend = tm_legend(show = FALSE)) + 
-  
-  # --- Continental Divide
-  tm_shape(continental_divide) +
-  tm_lines(col = "black",
-           lwd = 2,
-           lty = "dashed") + 
-  
-  # --- Contributing Area ---
-  #tm_shape(recharge_area %>% st_transform(3857) %>% dplyr::mutate(group = "Contributing Area")) +
-  #tm_polygons(fill = "group",
-  #            fill.scale = tm_scale_categorical(values = "dodgerblue"),
-  #            fill_alpha = 0.2, col = "dodgerblue4", lwd = 1.5,
-  #            fill.legend = tm_legend(title = "", show = TRUE)) +
-
-  # --- Water Intake ---
-  tm_shape(select_sources %>% dplyr::mutate(group = "Logan Pass")) +
-  tm_dots(fill = "black", col = "white", lwd = 1, shape = 21, size = .8) +
-  tm_text("group", 
-          col = "black", 
-          bgcol = "white", 
-          bgcol_alpha = 0.3,
-          size = 1.1,
-          fontface = "bold",
-          remove.overlap = TRUE,
-          # ymod stays in the main call in v4
-          ymod = 0.1,
-          options = opt_tm_text(
-            point.label = TRUE
-          )) + 
-
-  # --- Layout and Extras ---
-  tm_basemap(server = "Esri.WorldTopoMap") +
-  
-  # --- Layout and Extras ---
-  tm_layout(frame = FALSE, 
-            # Ensure the basemap doesn't force the extent too wide
-            main.title.size = 1.1,
-            legend.outside = FALSE, 
-            legend.position = c("left", "top"),
-            legend.bg.color = "white", 
-            legend.bg.alpha = 1,
-            legend.title.size = 1.1, 
-            legend.text.size = 1.1) +
-  tm_compass(position = c("left", "bottom"), size = 2, text.size = 1.1, text.color = "white", bg.color = "white", bg.alpha = 0.2) +
-  tm_scalebar(position = c("left", "bottom"), text.size = 1.1, bg.color = "white", bg.alpha = 1)
-
-
-inset_site_fig
-
-tmap_save(inset_site_fig, dpi = 600,
-          filename = "data/park/GLAC/Figs/Inset_Site_Fig.jpg", width = 3, height = 3)
+ggsave("data/park/GLAC/Figs/Site_Fig.jpg", site_fig, width = 7, height = 6.6, dpi = 600)
+ggsave("data/park/GLAC/Figs/Inset_Site_Fig.jpg", site_inset, width = 3, height = 3, dpi = 600)
 ```
 
 
@@ -3233,7 +3355,7 @@ fin_plot <- main_plot + inset_element(inset_plot,
                            bottom = 0.45,
                            right  = 0.99,
                            top    = 0.99)
-ggsave("data/park/GLAC/Figs/sd_inflow_example_2025.jpg", dpi = 600, width = 7, height = 3.5)
+ggsave("data/park/GLAC/Figs/sd_inflow_example_2025.jpg", plot = fin_plot, dpi = 600, width = 7, height = 3.5)
 ```
 
 
@@ -3263,7 +3385,8 @@ ggarrange(
     geom_boxplot(fill = pal$pink) +
     theme_bw() +
     labs(y = "Demand Per\nVisitor (Gallons)", x = "") +
-    theme(legend.position = "none")
+    theme(legend.position = "none"),
+  labels = c("a)", "b)"), font.label = list(size = 11, face = "bold")
 )
 
 ggsave("data/park/GLAC/Figs/use_per_visitor.jpg", dpi = 600, width = 7, height = 3)
@@ -3352,17 +3475,20 @@ sp
 
 
 # --- 3. Future Operating Season Projection (DOY-averaged) ---
-fut_season_summary <- wbm %>%
-  dplyr::filter(year(date) %in% 2035:2064) %>%
-  dplyr::mutate(year = year(date),
-                month = month(date)) %>%
-  group_by(year, CF) %>%
-  dplyr::summarize(
-    june_snowpack = mean(snowpack_in_wbm[month == 6], na.rm = TRUE),
-    .groups       = "drop"
-  ) %>%
-  dplyr::mutate(start_doy = predict(start_date_mod, newdata = .)) %>%
-  dplyr::mutate(plot_start = as.Date(start_doy - 1, origin = "2000-01-01")) 
+# Not run: start_date_mod is fit on SNOTEL June snow depth (june_snwd), which
+# the WBM futures don't provide, and the result is only used in a commented-out
+# plot layer below.
+# fut_season_summary <- wbm %>%
+#   dplyr::filter(year(date) %in% 2035:2064) %>%
+#   dplyr::mutate(year = year(date),
+#                 month = month(date)) %>%
+#   group_by(year, CF) %>%
+#   dplyr::summarize(
+#     june_snowpack = mean(snowpack_in_wbm[month == 6], na.rm = TRUE),
+#     .groups       = "drop"
+#   ) %>%
+#   dplyr::mutate(start_doy = predict(start_date_mod, newdata = .)) %>%
+#   dplyr::mutate(plot_start = as.Date(start_doy - 1, origin = "2000-01-01")) 
 
 all_season_summary <- wbm %>%
   dplyr::filter(year(date) > 2015, year(date) < 2026,
@@ -3470,7 +3596,7 @@ tmap_figure <-
           fill.scale = tm_scale_categorical(values = "royalblue"),
           size = 0.5, shape = 21,
           fill.legend = tm_legend(title = "", show = TRUE)) +
-  tm_labels(text = "station_name", size = 0.75) +
+  tm_labels(text = "name", size = 0.75) +
 
   tm_basemap(server = "Esri.WorldTopoMap") +
   tm_layout(legend.outside = TRUE, frame = FALSE, legend.frame = FALSE,
@@ -3489,6 +3615,7 @@ tmap_save(tmap_figure, dpi = 600,
 ```{r wb_fig}
 plot_dat <- wbm_annual %>%
   dplyr::ungroup() %>%
+  drop_partial_years() %>%
   dplyr::select(
     year, GCM, CF,
     "Precipitation (in)" = "precip_in_wbm",
@@ -3506,7 +3633,7 @@ plot_dat <- wbm_annual %>%
   dplyr::mutate(CF = factor(CF, levels = c("Historical", "Warm Wet", "Hot Dry")))
 
 wb_fig <- ggplot(plot_dat) +
-  geom_rect(aes(xmin = 2035, xmax = 2065, ymin = -Inf, ymax = Inf),
+  geom_rect(aes(xmin = fut_yrs[1], xmax = fut_yrs[2], ymin = -Inf, ymax = Inf),
             fill = "grey85", linewidth = 0, alpha = 0.1) +
   geom_line(aes(x = year, y = vals,      color = CF), lwd = 0.5) +
   geom_line(aes(x = year, y = roll_vals, group = CF),
@@ -3571,7 +3698,7 @@ pdat <- vis_clim %>%
   dplyr::filter(year < 2100, year > 1997)
 
 vis_annual_fig <- ggplot(pdat) +
-  geom_rect(aes(xmin = 2035, xmax = 2065, ymin = -Inf, ymax = Inf),
+  geom_rect(aes(xmin = fut_yrs[1], xmax = fut_yrs[2], ymin = -Inf, ymax = Inf),
             fill = "lightgrey", alpha = 0.3) +
   geom_ribbon(aes(x = year, ymin = vis_smooth_low, ymax = vis_smooth_high, fill = c_group),
               alpha = 0.4, lwd = 0) +
@@ -3622,7 +3749,7 @@ use_monthly_fig <- ggplot(monthly_use_proportions) +
   theme_legend_bottom
 
 use_annual_fig <- ggplot(annual_use %>% dplyr::filter(year > 1997)) +
-  geom_rect(aes(xmin = 2035, xmax = 2065, ymin = -Inf, ymax = Inf),
+  geom_rect(aes(xmin = fut_yrs[1], xmax = fut_yrs[2], ymin = -Inf, ymax = Inf),
             fill = "lightgrey", alpha = 0.3) +
   geom_ribbon(aes(x = year, ymin = low_use, ymax = high_use, fill = c_group), alpha = 0.4, lwd = 0) +
   geom_line(aes(x = year, y = mid_use), color = "black", lwd = 2, lineend = "round") +
@@ -3654,19 +3781,21 @@ ggsave(hf_use_fig, filename = "data/park/GLAC/Figs/hist_fut_use.tif",
 
 ```{r runoff_variability}
 pdat <- wbm_annual %>%
+  drop_partial_years() %>%
   dplyr::filter(year < 2100) %>%
   dplyr::mutate(Runoff = runoff_cf)
 
-hist_median  <- median(pdat[pdat$year < 2013, ]$Runoff, na.rm = TRUE) %>% as.numeric()
-hist_q_low   <- quantile(pdat[pdat$year < 2013, ]$Runoff, 0.1,  na.rm = TRUE) %>% as.numeric()
-hist_q_high  <- quantile(pdat[pdat$year < 2013, ]$Runoff, 0.9,  na.rm = TRUE) %>% as.numeric()
+hist_runoff  <- pdat[pdat$CF == "Historical" & in_hist(pdat$year), ]$Runoff
+hist_median  <- median(hist_runoff, na.rm = TRUE) %>% as.numeric()
+hist_q_low   <- quantile(hist_runoff, 0.1,  na.rm = TRUE) %>% as.numeric()
+hist_q_high  <- quantile(hist_runoff, 0.9,  na.rm = TRUE) %>% as.numeric()
 
 runoff_var <- ggplot(
   pdat %>%
     pivot_longer(cols = Runoff, values_to = "vals", names_to = "vars") %>%
     dplyr::mutate(
-      rect_min = ifelse(CF != "Historical", 2035, 1979),
-      rect_max = ifelse(CF != "Historical", 2065, 2012),
+      rect_min = ifelse(CF != "Historical", fut_yrs[1], hist_yrs[1]),
+      rect_max = ifelse(CF != "Historical", fut_yrs[2], hist_yrs[2]),
       CF       = factor(CF, levels = c("Historical", "Hot Dry", "Warm Wet"))
     )
 ) +
@@ -3683,7 +3812,8 @@ runoff_var <- ggplot(
   scale_y_continuous(labels = unit_format(unit = "M", scale = 1e-6)) +
   scale_fill_cf() +
   scale_color_manual("", values = c("gray30", pal$black, "gray30")) +
-  facet_wrap(~CF, scales = "free_x", ncol = 3) +
+  # equal spacing per year across panels (Historical is shorter than the futures)
+  facet_grid(~CF, scales = "free_x", space = "free_x") +
   theme(strip.background = element_rect(fill = "gray95"),
         strip.text        = element_text(colour = "black", face = "bold"),
         axis.text.x       = element_text(angle = 45, vjust = 1, hjust = 1)) +
@@ -3720,7 +3850,7 @@ make_extreme_event_fig <- function(wbm_df, var_col, y_label) {
   # Historical quantile thresholds (baseline period only)
   historic_q <- df %>%
     dplyr::filter(cf == "Historical", rolling_3day > 0,
-                  year >= hist_yrs[1] & year < hist_yrs[2]) %>%
+                  in_hist(year)) %>%
     dplyr::ungroup() %>%
     dplyr::summarize(
       QLOW  = quantile(rolling_3day, probs = q_low),
@@ -3739,13 +3869,12 @@ make_extreme_event_fig <- function(wbm_df, var_col, y_label) {
                       .groups = "drop") %>%
     dplyr::mutate(
       CF       = factor(cf, levels = c("Historical", "Hot Dry", "Warm Wet")),
-      rect_min = ifelse(cf != "Historical", 2035, 1979),
-      rect_max = ifelse(cf != "Historical", 2065, 2012)
+      rect_min = ifelse(cf != "Historical", fut_yrs[1], hist_yrs[1]),
+      rect_max = ifelse(cf != "Historical", fut_yrs[2], hist_yrs[2])
     )
   # Frequency + intensity stats over the relevant historical/future windows
   stats <- year_counts %>%
-    dplyr::filter((year >= hist_yrs[1] & year < hist_yrs[2]) |
-                  (year >= fut_yrs[1]  & year < fut_yrs[2])) %>%
+    dplyr::filter(in_window(year)) %>%
     dplyr::group_by(cf) %>%
     dplyr::summarize(
       count           = sum(n_high_days, na.rm = TRUE),
@@ -3766,7 +3895,8 @@ make_extreme_event_fig <- function(wbm_df, var_col, y_label) {
     theme_bw() +
     labs(x = "", y = y_label) +
     scale_fill_cf() +
-    facet_wrap(~CF, scales = "free_x", ncol = 3) +
+    # equal spacing per year across panels (Historical is shorter than the futures)
+    facet_grid(~CF, scales = "free_x", space = "free_x") +
     theme(axis.text.x       = element_text(angle = 45, vjust = 1, hjust = 1),
           strip.background   = element_rect(fill = "gray95"),
           strip.text         = element_text(colour = "black", face = "bold")) +
@@ -3783,6 +3913,7 @@ precip_extreme <- make_extreme_event_fig(
 )
 
 stats_precip <- precip_extreme$stats
+save_table(stats_precip, "extreme_precip_event_stats")
 precip_extreme$fig
 
 ggsave(precip_extreme$fig, filename = "data/park/GLAC/Figs/Extreme_Precip_events.jpg",
@@ -3798,6 +3929,7 @@ runoff_extreme <- make_extreme_event_fig(
 )
 
 stats_runoff <- runoff_extreme$stats
+save_table(stats_runoff, "extreme_runoff_event_stats")
 runoff_extreme$fig
 
 ggsave(runoff_extreme$fig, filename = "data/park/GLAC/Figs/Extreme_Runoff_events.jpg",
@@ -3968,6 +4100,7 @@ peak_runoff <- snowmelt_stats_d %>% dplyr::group_by(CF) %>% slice_max(runoff_mov
 # Annual melt fraction time series
 snowmelt_stats_annual <- wbm_annual %>%
   dplyr::ungroup() %>%
+  drop_partial_years() %>%
   dplyr::mutate(
     total_avail      = melt_in_wbm + rain_in_wbm,
     melt_run         = if_else(total_avail > 0,
@@ -3996,7 +4129,7 @@ snowmelt_stats_annual %>%
 
 # Top figure - snowmelt fraction of runoff through time
 sm_fraction_fig <- ggplot(snowmelt_stats_annual) +
-  geom_rect(aes(xmin = 2035, xmax = 2065, ymin = -Inf, ymax = Inf),
+  geom_rect(aes(xmin = fut_yrs[1], xmax = fut_yrs[2], ymin = -Inf, ymax = Inf),
             fill = "lightgrey", alpha = 0.1) +
   geom_line(aes(x = year, y = melt_frac, group = CF), color = "black", lwd = 2, lineend = "round") +
   geom_line(aes(x = year, y = melt_frac, color = CF), lwd = 1.5, lineend = "round") +
@@ -4050,7 +4183,7 @@ ggsave(sm_fig, filename = "data/park/GLAC/Figs/Snowmelt.tif",
 
 ```{r spei_plot}
 drought <- ggplot(spei, aes(x = ym, y = spei)) +
-  geom_rect(aes(xmin = as.Date("2035-01-01"), xmax = as.Date("2065-01-01"),
+  geom_rect(aes(xmin = as.Date(paste0(fut_yrs[1], "-01-01")), xmax = as.Date(paste0(fut_yrs[2], "-12-31")),
                 ymin = -Inf, ymax = Inf),
             fill = "lightgrey", alpha = 0.1) +
   geom_hline(aes(yintercept = -1),   linetype = "dashed", color = "pink3") +
@@ -4148,6 +4281,7 @@ monthly_ds_fig <- ggplot(pdat_ds2) +
 
 # Annual D:S ratio
 annual_ds_fig <- ggplot(DS_df %>%
+                          drop_partial_years() %>%
                           dplyr::mutate(CF = factor(CF, levels = c("Historical", "Hot Dry", "Warm Wet"))),
                         aes(x = year)) +
   geom_ribbon(aes(ymax = DS_stress, ymin = DS, fill = CF), alpha = 0.4) +
@@ -4157,7 +4291,8 @@ annual_ds_fig <- ggplot(DS_df %>%
   geom_hline(yintercept = 1) + geom_hline(yintercept = 0.2, linetype = 2) +
   scale_color_cf() + scale_fill_cf() +
   labs(x = "", y = "Annual D:S") +
-  facet_wrap(~CF, scales = "free_x")
+  # equal spacing per year across panels (Historical is shorter than the futures)
+  facet_grid(~CF, scales = "free_x", space = "free_x")
 
 ds_fig <- ggarrange(monthly_ds_fig, annual_ds_fig,
                     ncol = 1, common.legend = TRUE, legend = "right")
@@ -4172,97 +4307,115 @@ ggsave(ds_fig, filename = "data/park/GLAC/Figs/ds.tif",
 Track simulated tank storage through time to assess adequacy under different climate futures.
 
 ```{r tank_storage}
-
-tank_cap_gal <- 10000  # 10,000-gallon tank capacity
-
-# Helper: simulate tank level over one year using accumulate2
-# Returns a data frame with `level` and `deficit` columns (one row per month).
-calc_storage_details <- function(sup_vec, dem_vec, cap = tank_cap_gal) {
-  res <- purrr::accumulate2(
-    sup_vec, dem_vec,
-    function(prev, sup, dem) {
-      potential <- prev$level + sup - dem
-      list(
-        level   = max(0, min(cap, potential)),
-        deficit = ifelse(potential < 0, abs(potential), 0)
-      )
-    },
-    .init = list(level = cap, deficit = 0)
-  )[-1]  # Drop initial condition
-  purrr::map_df(res, ~.)
+# Daily tank mass balance: each day the tank gains modeled inflow and loses
+# demand, capped between empty and full; any shortfall below empty is a
+# deficit. The tank starts full on January 1 (it refills over the winter,
+# when there is no demand), then runs continuously through the year.
+calc_storage_daily <- function(sup_vec, dem_vec, cap) {
+  level <- numeric(length(sup_vec)); deficit <- numeric(length(sup_vec))
+  prev <- cap
+  for (i in seq_along(sup_vec)) {
+    potential  <- prev + sup_vec[i] - dem_vec[i]
+    level[i]   <- max(0, min(cap, potential))
+    deficit[i] <- max(0, -potential)
+    prev       <- level[i]
+  }
+  data.frame(level = level, deficit = deficit)
 }
 
-pdat_tank <- monthly_use %>%
-  left_join(wbm_monthly %>%
-              dplyr::select(ym, CF, GCM, inflow_gal, inflow_gal_low, inflow_gal_high),
-            by = "ym") %>%
-  dplyr::mutate(year = year(ym), month = month(ym)) %>%
-  drop_na(CF) %>%
-  dplyr::group_by(CF, year, GCM) %>%
-  dplyr::arrange(month, .by_group = TRUE) %>%          # Ensure sequential order for accumulate2
-  dplyr::mutate(
-    monthly_sup_gal       = inflow_gal_low,
-    monthly_use_gal       = monthly_use_mid,
-    monthly_use_gal_low   = monthly_use_low,
-    monthly_use_gal_high  = monthly_use_high) %>%
-  dplyr::group_modify(~ {
-    avg_res  <- calc_storage_details(.x$monthly_sup_gal, .x$monthly_use_gal)
-    low_res  <- calc_storage_details(.x$monthly_sup_gal, .x$monthly_use_gal_high)
-    high_res <- calc_storage_details(.x$monthly_sup_gal, .x$monthly_use_gal_low)
-    .x %>% mutate(
-      tank_storage_gal      = avg_res$level,
-      deficit_gal           = avg_res$deficit,
-      deficit_gal_low       = low_res$deficit,
-      deficit_gal_high      = high_res$deficit,
-      tank_storage_gal_low  = low_res$level,
-      tank_storage_gal_high = high_res$level
-    )
-  }) %>%
-  # Classify into analysis periods for comparison
-  dplyr::mutate(
-    plot_group = case_when(
-      year >= 2015 & year < 2025 ~ "Recent Historical (2015-2025)",
-      year >= 2045 & year < 2055 ~ "Future Mid-Century (2045-2055)",
-      year >= 2090 & year < 2100 ~ "Future Late-Century (2090-2100)",
-      TRUE                        ~ NA_character_
-    )
-  ) %>%
-  drop_na(plot_group) %>%
-  dplyr::group_by(month, CF, plot_group) %>%
+# Daily demand: monthly use (with the operating-season mask) spread evenly
+# over the days of the month
+daily_use <- monthly_use %>%
+  dplyr::transmute(ym,
+                   use_low  = monthly_use_low  / days_in_month(ym),
+                   use_mid  = monthly_use_mid  / days_in_month(ym),
+                   use_high = monthly_use_high / days_in_month(ym))
+
+tank_periods <- c("Recent Historical (2015-2025)", "Mid-Century (2045-2054)",
+                  "Late-Century (2090-2099)")
+
+tank_dat <- wbm %>%
+  dplyr::select(date, CF, inflow_gal, inflow_gal_low, inflow_gal_high) %>%
+  dplyr::mutate(year = year(date), ym = floor_date(date, "month"),
+                plot_group = dplyr::case_when(
+                  CF == "Historical" & year >= 2015 & year <= 2025 ~ tank_periods[1],
+                  CF != "Historical" & year >= 2045 & year <= 2054 ~ tank_periods[2],
+                  CF != "Historical" & year >= 2090 & year <= 2099 ~ tank_periods[3])) %>%
+  dplyr::filter(!is.na(plot_group)) %>%
+  dplyr::left_join(daily_use, by = "ym") %>%
+  dplyr::arrange(CF, date)
+
+# Scenarios (supply, demand): average = mid inflow and mid demand; high
+# stress = low inflow and high demand; low stress = high inflow and low demand
+simulate_tank <- function(cap) {
+  tank_dat %>%
+    dplyr::group_by(CF, year) %>%
+    dplyr::group_modify(~ {
+      avg  <- calc_storage_daily(.x$inflow_gal,      .x$use_mid,  cap)
+      high <- calc_storage_daily(.x$inflow_gal_low,  .x$use_high, cap)
+      low  <- calc_storage_daily(.x$inflow_gal_high, .x$use_low,  cap)
+      .x %>% dplyr::mutate(avg_level = avg$level,  avg_deficit = avg$deficit,
+                           high_stress_level = high$level, high_stress_deficit = high$deficit,
+                           low_stress_level  = low$level,  low_stress_deficit  = low$deficit)
+    }) %>%
+    dplyr::ungroup() %>%
+    dplyr::mutate(doy = yday(date)) %>%
+    dplyr::group_by(CF, plot_group, doy) %>%
+    dplyr::summarize(across(c(avg_level, high_stress_level, low_stress_level,
+                              avg_deficit, high_stress_deficit, low_stress_deficit), mean),
+                     .groups = "drop") %>%
+    dplyr::mutate(tank_gal   = cap,
+                  date_plot  = as.Date(doy - 1, origin = "2020-01-01"),
+                  plot_group = factor(plot_group, levels = tank_periods),
+                  CF         = factor(CF, levels = c("Historical", "Hot Dry", "Warm Wet")))
+}
+
+tank_10k <- simulate_tank(10000)
+tank_50k <- simulate_tank(50000)
+
+# Summary for the text: days per year the tank is empty, and annual deficit,
+# during the operating season (June-September)
+tank_summary <- dplyr::bind_rows(tank_10k, tank_50k) %>%
+  dplyr::filter(month(date_plot) %in% 6:9) %>%
+  dplyr::group_by(tank_gal, CF, plot_group) %>%
   dplyr::summarize(
-    avg_tank_level        = mean(tank_storage_gal,      na.rm = TRUE),
-    low_tank_level        = mean(tank_storage_gal_low,  na.rm = TRUE),
-    high_tank_level       = mean(tank_storage_gal_high, na.rm = TRUE),
-    total_monthly_deficit = mean(deficit_gal,           na.rm = TRUE),
-    low_monthly_deficit   = mean(deficit_gal_low,       na.rm = TRUE),
-    high_monthly_deficit  = mean(deficit_gal_high,      na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  dplyr::mutate(
-    ym         = as.Date(paste0("2020-", month, "-01")),
-    plot_group = factor(plot_group,
-                        levels = c("Recent Historical (2015-2025)",
-                                   "Future Mid-Century (2045-2055)",
-                                   "Future Late-Century (2090-2100)")),
-    CF         = factor(CF, levels = c("Historical", "Hot Dry", "Warm Wet"))
-  )
+    min_avg_level        = min(avg_level),
+    min_high_stress      = min(high_stress_level),
+    empty_days_avg       = sum(avg_level < 1),
+    empty_days_high      = sum(high_stress_level < 1),
+    deficit_gal_avg      = sum(avg_deficit),
+    deficit_gal_high     = sum(high_stress_deficit),
+    first_empty_avg      = suppressWarnings(min(date_plot[avg_level < 1])),
+    first_empty_high     = suppressWarnings(min(date_plot[high_stress_level < 1])),
+    .groups = "drop")
+save_table(tank_summary, "table_tank_storage")
+tank_summary
 
-track_storage_fig <- ggplot(pdat_tank, aes(x = ym, fill = CF)) +
-  geom_ribbon(aes(ymin = low_tank_level, ymax = high_tank_level), alpha = 0.3, lwd = 0) +
-  geom_line(aes(y = avg_tank_level), color = "black", lwd = 1.5) +
-  geom_line(aes(y = avg_tank_level, color = CF), lwd = 1) +
-  facet_wrap(~plot_group) +
-  labs(y = "Tank Level (gallons)", x = "") +
-  theme_bw() +
-  scale_x_date(date_labels = "%b", date_breaks = "1 month") +
-  scale_color_cf() +
-  scale_fill_cf() +
-  theme_legend_bottom +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+tank_fig <- function(d) {
+  ggplot(d %>% dplyr::filter(month(date_plot) %in% 5:10), aes(x = date_plot, fill = CF)) +
+    geom_ribbon(aes(ymin = high_stress_level, ymax = low_stress_level), alpha = 0.3, lwd = 0) +
+    geom_line(aes(y = avg_level, group = CF), color = "black", lwd = 1.5) +
+    geom_line(aes(y = avg_level, color = CF), lwd = 1) +
+    facet_wrap(~plot_group) +
+    labs(y = "Tank Level (gallons)", x = "",
+         title = paste0(scales::comma(unique(d$tank_gal)), "-gallon tank")) +
+    theme_bw() +
+    scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+    scale_y_continuous(labels = scales::comma, limits = c(0, NA)) +
+    scale_color_cf() +
+    scale_fill_cf() +
+    theme_legend_bottom +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          plot.title = element_text(size = 10, face = "bold"))
+}
 
+track_storage_fig    <- tank_fig(tank_10k)
+track_storage_fig_50 <- tank_fig(tank_50k)
 track_storage_fig
 
 ggsave(track_storage_fig, filename = "data/park/GLAC/Figs/track_storage_10kgal.tif",
+       dpi = 600, width = 7, height = 2.5)
+ggsave(track_storage_fig_50, filename = "data/park/GLAC/Figs/track_storage_50kgal.tif",
        dpi = 600, width = 7, height = 2.5)
 ```
 
